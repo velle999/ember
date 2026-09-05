@@ -19,6 +19,10 @@ dosfstools
 # so without it the image build fails on "No such file or directory" and a
 # machine that did build would have an administrative user who cannot administer
 # anything. A sudoers rule for an uninstalled package is not a small mistake.
+# growpart, for expanding the root partition on first boot after the image has
+# been written to a card larger than itself. It is built for growing a MOUNTED
+# partition, which is what the running root is.
+cloud-guest-utils
 sudo
 nano
 less

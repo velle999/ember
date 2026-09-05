@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# ember-expand-root — grow the root partition to fill its device, once.
+#
+# An image is written with dd, so the root partition is image-sized however
+# large the card is: a 5 GB image on a 238 GB card leaves 233 GB unreachable.
+# Raspberry Pi OS expands on first boot; Void does not, so this does.
+#
+# ⛔ IT REPARTITIONS A DISK UNATTENDED, so every step is a refusal until proven
+# otherwise. It runs only when the root is a real partition, only when it is the
+# LAST partition on its disk, only when there is meaningful free space after it,
+# and only once. Anything it is unsure of, it declines and leaves the disk alone.
+#
+# ⚠ growpart, not hand-rolled parted. It is built for growing a partition that
+# is currently MOUNTED — it rewrites the entry and tells the kernel through
+# BLKPG — which is exactly the case here, the partition being the running root.
+# resize2fs then grows ext4 online, which ext4 supports.
+#
+# ⚠ NEVER blocks boot. Every failure path is a message and exit 0: an
+# unexpanded filesystem is an inconvenience, an unbootable machine is not.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -u
+
+MARKER=/var/lib/ember/root-expanded
+MIN_FREE_SECTORS=524288          # 256 MiB — below this it is not worth the risk
+
+note() { printf 'ember-expand: %s\n' "$1"; }
+done_() { mkdir -p "$(dirname "$MARKER")" 2>/dev/null; date -u +%FT%TZ > "$MARKER" 2>/dev/null; exit 0; }
+
+[ -e "$MARKER" ] && exit 0
+
+command -v growpart  >/dev/null || { note "growpart missing; not expanding"; exit 0; }
+command -v resize2fs >/dev/null || { note "resize2fs missing; not expanding"; exit 0; }
+
+ROOTDEV=$(findmnt -no SOURCE / 2>/dev/null)
+case "$ROOTDEV" in
+    /dev/*) ;;
+    *) note "root is '$ROOTDEV', not a plain device; not expanding"; done_ ;;
+esac
+# ⛔ Only ext4. resize2fs on anything else is a mistake, and btrfs/f2fs grow by
+# entirely different commands.
+[ "$(findmnt -no FSTYPE / 2>/dev/null)" = ext4 ] || { note "root is not ext4; not expanding"; done_; }
+
+RNAME=${ROOTDEV#/dev/}
+[ -e "/sys/class/block/$RNAME/partition" ] || { note "root is not a partition; not expanding"; done_; }
+PARTNUM=$(cat "/sys/class/block/$RNAME/partition" 2>/dev/null)
+DISK=$(lsblk -no PKNAME "$ROOTDEV" 2>/dev/null | head -1)
+[ -n "$DISK" ] && [ -b "/dev/$DISK" ] || { note "cannot find the parent disk; not expanding"; done_; }
+
+# ⛔ THE LAST PARTITION, OR NOTHING. Growing a partition that has another after
+# it would run straight into that partition's data. On this image root is second
+# of two, but the check is on the disk as found, not on what we shipped.
+LAST=$(lsblk -no NAME "/dev/$DISK" | tail -n +2 | sed 's/[^0-9]*//' | sort -n | tail -1)
+[ "$PARTNUM" = "$LAST" ] || { note "root is partition $PARTNUM of $LAST; not the last, refusing"; done_; }
+
+DISK_SECT=$(cat "/sys/class/block/$DISK/size" 2>/dev/null || echo 0)
+PART_START=$(cat "/sys/class/block/$RNAME/start" 2>/dev/null || echo 0)
+PART_SECT=$(cat "/sys/class/block/$RNAME/size" 2>/dev/null || echo 0)
+FREE=$(( DISK_SECT - PART_START - PART_SECT ))
+
+if [ "$FREE" -lt "$MIN_FREE_SECTORS" ]; then
+    note "only $(( FREE / 2048 )) MiB free after the root partition; nothing worth doing"
+    done_
+fi
+
+note "growing /dev/$DISK partition $PARTNUM into $(( FREE / 2048 )) MiB of free space"
+if growpart "/dev/$DISK" "$PARTNUM" >/dev/null 2>&1; then
+    if resize2fs "$ROOTDEV" >/dev/null 2>&1; then
+        note "root filesystem is now $(df -h / | awk 'NR==2{print $2}')"
+    else
+        note "the partition grew but resize2fs failed; run it by hand: resize2fs $ROOTDEV"
+    fi
+else
+    # growpart exits non-zero when there is nothing to do as well as on error,
+    # so this is a note rather than an alarm.
+    note "growpart made no change"
+fi
+done_

@@ -57,6 +57,8 @@ cp -a /out/rootfs/. /mnt/
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
+install -Dm755 /installer/ember-expand-root /mnt/usr/bin/ember-expand-root
+install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
 # ── libretro cores ──────────────────────────────────────────────────────────
