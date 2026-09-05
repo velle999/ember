@@ -35,7 +35,12 @@ cd "$(dirname "$0")/.."
 ARCH=${1:-i686}
 case "$ARCH" in
     i686)    BB=linux/x86/latest ;;
-    aarch64) BB=linux/arm64/latest ;;
+    # ⚠ linux/aarch64, NOT linux/arm64. The buildbot uses the GNU triplet
+    # spelling; the Docker/OCI spelling `arm64` is a 404 — and a 404 per core
+    # reads as "not built for this architecture", so the first run of this
+    # reported all 31 cores unavailable and produced an empty directory rather
+    # than an error. Verified: linux/aarch64 carries 424 cores, linux/armhf 218.
+    aarch64) BB=linux/aarch64/latest ;;
     *) echo "usage: $0 <i686|aarch64>" >&2; exit 2 ;;
 esac
 BASE="https://buildbot.libretro.com/nightly/$BB"
