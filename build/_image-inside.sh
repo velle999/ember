@@ -139,10 +139,16 @@ if [ "$TIER" = desktop ]; then
     ln -sf /etc/sv/polkitd        .
     ln -sf /etc/sv/NetworkManager .
     ln -sf /etc/sv/lightdm        .
-    # Mounting a disk from the desktop is udisks2 doing the work behind gvfs;
-    # with the service off, clicking a volume fails with a permission error
-    # that looks like a polkit problem and is not.
-    [ -d /etc/sv/udisks2 ] && ln -sf /etc/sv/udisks2 .
+    # ⚠ NO udisks2 SERVICE, and that is correct: Void ships udisks2 as a
+    # D-Bus activated daemon with no /etc/sv entry, so it starts on demand when
+    # gvfs asks it to. There is nothing to enable.
+    #
+    # ⛔ The line that used to be here was `[ -d /etc/sv/udisks2 ] && ln -sf ...`
+    # and it was the LAST command in this script. When the test failed — which
+    # it always did, the directory never existing — the && yielded 1, `set -e`
+    # made that the script exit status, and the whole image build reported
+    # FAILURE after having completed successfully. Never end a script on a bare
+    # `test && command`.
 else
     ln -sf /etc/sv/dhcpcd .
 fi

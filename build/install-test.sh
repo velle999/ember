@@ -109,13 +109,35 @@ echo "== booting the live image with that disk attached, running ember-install"
 # ⚠ The live image is hd0 and the target is hd1 ONLY inside qemu's boot order;
 # ember-install picks the biggest NON-REMOVABLE disk, and both look fixed here.
 # So the disk is named explicitly rather than left to the heuristic.
+# ⛔ TWICE. The first run carves the free space; the second has none left and
+# must reinstall over what it made rather than fail or, far worse, take space
+# from something else. The second run is the one that matters here, because it
+# is the run that reformats a partition that already exists.
 cat > "$T/autorun.sh" <<'AUTO'
 #!/bin/bash
 exec >/dev/ttyS0 2>&1
 echo "AUTORUN-BEGIN"
-ember-install --plan /dev/sdb || true
-ember-install --yes  /dev/sdb
-echo "AUTORUN-DONE rc=$?"
+# ⛔ THE TARGET IS FOUND BY CONTENT, NEVER BY LETTER. /dev/sdb assumed the live
+# image would be sda, and when the image grew the guest enumerated them the
+# other way round — so the rig told the installer to reinstall over the running
+# system. It refused, correctly, which is the only reason that was a failed test
+# and not a destroyed one. The stand-in disk is whichever one holds the
+# partition labelled XPDISK.
+DISK=$(blkid -L XPDISK 2>/dev/null | sed 's/[0-9]*$//')
+echo "TARGET-DISK=$DISK"
+if [ -z "$DISK" ] || [ ! -b "$DISK" ]; then
+    echo "NO-TARGET-FOUND"; lsblk -o NAME,SIZE,FSTYPE,LABEL; blkid; poweroff -f
+fi
+
+ember-install --plan "$DISK" || true
+ember-install --yes  "$DISK"
+echo "FIRST-INSTALL rc=$?"
+
+echo "SECOND-PASS-BEGIN"
+ember-install --yes "$DISK" && echo "SECOND-PLAIN-UNEXPECTEDLY-OK" || echo "SECOND-PLAIN-REFUSED rc=$?"
+ember-install --reuse --yes "$DISK"
+echo "REUSE-DONE rc=$?"
+echo "AUTORUN-DONE"
 sync
 poweroff -f
 AUTO
@@ -125,7 +147,14 @@ docker run --rm --privileged -v /dev:/dev -v "$PWD/$T:/t" -v "$PWD/$(dirname "$L
     ghcr.io/void-linux/void-linux:latest-full-x86_64 /bin/sh -euc '
     cp /live/*.img /t/live.img
     LOOP=$(losetup --find --partscan --show /t/live.img)
-    trap "umount /mnt 2>/dev/null; losetup -d $LOOP" EXIT
+    trap "umount /mnt 2>/dev/null || true; losetup -d \$LOOP 2>/dev/null || true" EXIT
+    # ⛔ WAIT FOR THE PARTITION NODE. --partscan is asynchronous: the kernel
+    # creates ${LOOP}p1 a moment after losetup returns, and the delay scales
+    # with the image. Mounting immediately fails with "No such file or
+    # directory" from mount(2), which reads like a missing mount point rather
+    # than a device that has not appeared yet. It worked until the image grew.
+    for _ in $(seq 1 50); do [ -b "${LOOP}p1" ] && break; sleep 0.2; done
+    [ -b "${LOOP}p1" ] || { echo "partition node never appeared for $LOOP" >&2; exit 1; }
     mount "${LOOP}p1" /mnt
     install -Dm755 /t/autorun.sh /mnt/usr/bin/ember-autorun
     mkdir -p /mnt/etc/sv/autorun
@@ -139,7 +168,13 @@ docker run --rm --privileged -v /dev:/dev -v "$PWD/$T:/t" -v "$PWD/$(dirname "$L
 ' || { echo "install-test: could not prepare the live image" >&2; exit 1; }
 
 LOG="$T/serial.log"
-timeout 900 qemu-system-i386 -m 2048 -smp 2 \
+# ⚠ TWO FULL INSTALLS UNDER TCG, each rsyncing the whole system. This was 900s
+# and the second one was still running when qemu was killed — so the rig
+# reported "--reuse failed" for a feature that had not been given time to
+# finish. Emulated, with no KVM, and growing with every package added to the
+# image; overridable for a slower machine.
+QEMU_TIMEOUT=${QEMU_TIMEOUT:-3000}
+timeout "$QEMU_TIMEOUT" qemu-system-i386 -m 2048 -smp 2 \
     -drive file="$T/live.img",format=raw,if=ide,index=0 \
     -drive file="$TARGET",format=raw,if=ide,index=1 \
     -display none -serial file:"$LOG" -no-reboot >/dev/null 2>"$T/qemu.err"
@@ -187,6 +222,32 @@ grep -q "^/t/target.img2 " "$T/table.after" 2>/dev/null \
 grep -q "verified: every pre-existing partition entry is unchanged" "$LOG" 2>/dev/null \
     && ok "the installer ran its own table check" \
     || bad "the installer's own table check did not run or did not pass"
+
+# ── the reinstall pass ──────────────────────────────────────────────────────
+grep -q "SECOND-PLAIN-REFUSED" "$LOG" 2>/dev/null \
+    && ok "a second plain install refused — no free space left to take" \
+    || bad "the second plain install did not refuse; it must not improvise space"
+
+# ⛔ TELL "IT FAILED" APART FROM "IT NEVER FINISHED". Without this the rig
+# blamed --reuse for a qemu timeout, which is the kind of wrong answer that
+# sends someone debugging a feature that works.
+if ! grep -q "AUTORUN-DONE" "$LOG" 2>/dev/null; then
+    bad "the guest never finished — qemu was killed after ${QEMU_TIMEOUT}s.
+        This is a rig timeout, NOT a verdict on the installer. Re-run with
+        QEMU_TIMEOUT=6000 build/install-test.sh"
+elif grep -q "REUSE-DONE rc=0" "$LOG" 2>/dev/null; then
+    ok "--reuse reinstalled over its own partition"
+else
+    bad "--reuse ran and failed: $(grep -a 'REUSE-DONE' "$LOG" | tail -1)"
+fi
+
+# ⛔ THE ASSERTION THAT MATTERS FOR REINSTALL: reusing must not add a partition.
+# Three partitions after two installs would mean the second run carved new
+# space instead of reusing, which on a real disk is space taken from somewhere.
+nparts=$(grep -c "^/t/target.img[0-9]" "$T/table.after" 2>/dev/null || echo 0)
+[ "$nparts" = 2 ] \
+    && ok "still exactly 2 partitions after reinstalling (no new one carved)" \
+    || bad "expected 2 partitions after a reinstall, found $nparts"
 
 if grep -qiE "os-prober found the existing OS" "$LOG" 2>/dev/null; then
     ok "os-prober produced a menu entry for the other OS"

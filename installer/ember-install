@@ -24,20 +24,40 @@
 #   ember-install /dev/sda          # do it, with a confirmation prompt
 #   ember-install --yes /dev/sda    # no prompt (for the test rig)
 #
+#   ember-install --reuse           # REINSTALL over the existing Ember partition
+#   ember-install --reuse /dev/sda2 # ...naming it explicitly
+#
+# ⛔ --reuse REFORMATS A PARTITION THAT ALREADY EXISTS, so it only ever accepts
+# one that is provably a previous Ember install: an ext4 filesystem whose LABEL
+# is this system's. Anything else — NTFS, unlabelled, another distribution — is
+# refused, because "install over the same partition" and "install over the
+# partition next to it" differ by one keystroke and one of them is somebody's
+# Windows. --force-reuse overrides that check and asks a second time, in words.
+#
 # SPDX-License-Identifier: GPL-2.0-or-later
 set -euo pipefail
 
-PLAN_ONLY=0; ASSUME_YES=0; DISK=""
+PLAN_ONLY=0; ASSUME_YES=0; DISK=""; REUSE=0; REUSE_PART=""; FORCE_REUSE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --plan) PLAN_ONLY=1 ;;
         --yes|-y) ASSUME_YES=1 ;;
+        --reuse) REUSE=1
+                 case "${2:-}" in /dev/*) REUSE_PART=$2; shift ;; esac ;;
+        --force-reuse) REUSE=1; FORCE_REUSE=1
+                 case "${2:-}" in /dev/*) REUSE_PART=$2; shift ;; esac ;;
         -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
         /dev/*) DISK=$1 ;;
         *) echo "ember-install: unknown argument $1" >&2; exit 2 ;;
     esac
     shift
 done
+
+# The filesystem label is how a later run recognises its own install. It is a
+# constant rather than a hostname so that renaming the machine does not make the
+# reinstall path stop recognising the partition it created.
+EMBER_LABEL=ember
+EMBER_NAME=Ember
 
 [ "$(id -u)" = 0 ] || { echo "ember-install: run me as root" >&2; exit 1; }
 for t in parted sfdisk mkfs.ext4 rsync grub-install grub-mkconfig blkid lsblk; do
@@ -77,6 +97,118 @@ if [ "$nprim" -ge 4 ]; then
     exit 1
 fi
 
+# ── reinstalling over an existing Ember partition ───────────────────────────
+#
+# This is the second-install case: the free space was consumed the first time,
+# so there is nothing left to carve and the intent is to replace what is there.
+if [ "$REUSE" = 1 ]; then
+    if [ -z "$REUSE_PART" ]; then
+        # Every ext4 partition on this disk labelled as ours. Auto-detection is
+        # deliberately narrow — it will not guess at an unlabelled partition.
+        # ⛔ -c /dev/null ON EVERY blkid CALL, or the cache answers instead of the
+        # disk. A partition created during this very boot is not in
+        # /run/blkid/blkid.tab, so cached blkid reports it as having no
+        # filesystem at all — which is exactly how a freshly made ext4 labelled
+        # `ember` was invisible to the code looking for an ext4 labelled `ember`.
+        #
+        # ⛔ blkid, NOT lsblk. lsblk's FSTYPE and LABEL columns come from udev,
+        # and in a freshly booted minimal system — or right after a partition is
+        # created — they are simply EMPTY. Auto-detection then finds nothing and
+        # says there is no previous install, on a disk that plainly has one.
+        # blkid probes the device itself and always answers.
+        mapfile -t CANDS < <(
+            for part in $(lsblk -pnro NAME,TYPE "$DISK" | awk '$2=="part" {print $1}'); do
+                [ "$(blkid -c /dev/null -s TYPE  -o value "$part" 2>/dev/null)" = ext4 ] || continue
+                [ "$(blkid -c /dev/null -s LABEL -o value "$part" 2>/dev/null)" = "$EMBER_LABEL" ] || continue
+                echo "$part"
+            done)
+        case "${#CANDS[@]}" in
+            0) echo "ember-install: no existing $EMBER_LABEL partition found on $DISK." >&2
+               lsblk -o NAME,SIZE,FSTYPE,LABEL "$DISK" | sed 's/^/  /' >&2
+               echo "               Name one explicitly if you know which it is." >&2
+               exit 1 ;;
+            1) REUSE_PART=${CANDS[0]} ;;
+            *) echo "ember-install: ${#CANDS[@]} partitions labelled $EMBER_LABEL — name one." >&2
+               printf '               %s\n' "${CANDS[@]}" >&2
+               exit 1 ;;
+        esac
+    fi
+    [ -b "$REUSE_PART" ] || { echo "ember-install: $REUSE_PART is not a block device" >&2; exit 1; }
+
+    # Same reason as above: probe, do not ask udev.
+    RFS=$(blkid -c /dev/null -s TYPE  -o value "$REUSE_PART" 2>/dev/null || true)
+    RLABEL=$(blkid -c /dev/null -s LABEL -o value "$REUSE_PART" 2>/dev/null || true)
+    RSIZE_MB=$(( $(blockdev --getsize64 "$REUSE_PART") / 1024 / 1024 ))
+    NEEDED=$(( $(du -sm --one-file-system / | cut -f1) + 512 ))
+
+    echo "   reinstall target: $REUSE_PART  (${RSIZE_MB} MiB, ${RFS:-no filesystem}, label '${RLABEL:-none}')"
+    echo "   this system needs: ${NEEDED} MiB"
+
+    # ⛔ THE GUARD. Only a partition that is already ours may be reformatted.
+    if [ "$RLABEL" != "$EMBER_LABEL" ] || [ "$RFS" != ext4 ]; then
+        if [ "$FORCE_REUSE" != 1 ]; then
+            echo "ember-install: $REUSE_PART is not a previous $EMBER_NAME install." >&2
+            echo "               It is '${RFS:-unformatted}' labelled '${RLABEL:-none}';" >&2
+            echo "               expected ext4 labelled '$EMBER_LABEL'. REFUSING." >&2
+            echo "               If you are certain, --force-reuse says so explicitly." >&2
+            exit 1
+        fi
+        FORCED_NOTE="   ⛔ FORCED: this is NOT a previous $EMBER_NAME install."
+    fi
+
+    if [ "$RSIZE_MB" -lt "$NEEDED" ]; then
+        echo "ember-install: $REUSE_PART is ${RSIZE_MB} MiB; ${NEEDED} MiB is needed." >&2
+        exit 1
+    fi
+
+    # ⚠ Mounted is refused rather than unmounted for you: if it is mounted it may
+    # be in use, and on a live USB the one partition you must never reformat is
+    # the one you are running from.
+    if findmnt -n -S "$REUSE_PART" >/dev/null 2>&1; then
+        echo "ember-install: $REUSE_PART is mounted at $(findmnt -no TARGET -S "$REUSE_PART")." >&2
+        echo "               Refusing. If that is the system you booted, you cannot" >&2
+        echo "               reinstall over it from inside itself." >&2
+        exit 1
+    fi
+
+    cat <<PLAN
+
+   PLAN (reinstall)
+     · REFORMAT $REUSE_PART — everything on it is destroyed
+     · copy this running system onto it
+     · back up the MBR and the partition table, then install GRUB to $DISK
+     · enable os-prober so the existing OS gets its own menu entry
+${FORCED_NOTE:-}
+
+   NOT TOUCHED: the partition table itself, and every other partition on $DISK.
+
+PLAN
+
+    [ "$PLAN_ONLY" = 1 ] && exit 0
+    if [ "$ASSUME_YES" != 1 ]; then
+        printf '   Type REINSTALL to proceed: '
+        read -r reply
+        [ "$reply" = REINSTALL ] || { echo "   aborted."; exit 1; }
+        if [ "${FORCED_NOTE:-}" != "" ]; then
+            printf '   You are overwriting something that is NOT %s. Type I UNDERSTAND: ' "$EMBER_NAME"
+            read -r reply2
+            [ "$reply2" = "I UNDERSTAND" ] || { echo "   aborted."; exit 1; }
+        fi
+    fi
+
+    BK=/root/ember-install-backup
+    mkdir -p "$BK"
+    dd if="$DISK" of="$BK/mbr.bin" bs=512 count=1 status=none
+    sfdisk -d "$DISK" > "$BK/partition-table.sfdisk" 2>/dev/null || true
+    echo "   backed up the MBR and partition table to $BK"
+
+    NEWPART="$REUSE_PART"
+    REUSING=1
+else
+    REUSING=0
+fi
+
+if [ "$REUSING" = 0 ]; then
 # ── find the free space ─────────────────────────────────────────────────────
 # parted reports unallocated regions as 'free' entries; the largest is taken.
 read -r FREE_START FREE_END FREE_SIZE <<EOF
@@ -144,12 +276,30 @@ echo "   backed up the MBR and partition table to $BK"
 # ── the new partition ───────────────────────────────────────────────────────
 parted -s "$DISK" mkpart primary ext4 "${START}MiB" "${END}MiB"
 partprobe "$DISK" 2>/dev/null || true
-sleep 2
+command -v udevadm >/dev/null && udevadm settle --timeout=15 2>/dev/null || true
 
 NEWNUM=$(parted -sm "$DISK" print 2>/dev/null | awk -F: 'NR>2 && $1 ~ /^[0-9]+$/ {n=$1} END {print n}')
-NEWPART="${DISK}${NEWNUM}"
-[ -b "$NEWPART" ] || NEWPART="${DISK}p${NEWNUM}"
-[ -b "$NEWPART" ] || { echo "ember-install: cannot find the new partition" >&2; exit 1; }
+
+# ⛔ THE DEVICE NODE APPEARS ASYNCHRONOUSLY. parted returns as soon as the table
+# is written; the kernel and udev create /dev/sdb2 a moment later, and how long
+# that takes varies with the disk and the machine. This was `sleep 2` and it was
+# not enough — the installer stopped at "cannot find the new partition" having
+# already written the partition table, which is the worst possible place to give
+# up: the disk is modified and nothing is installed. Waited for properly now,
+# with the timeout stated rather than guessed at.
+NEWPART=""
+for _ in $(seq 1 60); do
+    for cand in "${DISK}${NEWNUM}" "${DISK}p${NEWNUM}"; do
+        [ -b "$cand" ] && { NEWPART="$cand"; break 2; }
+    done
+    sleep 0.5
+done
+if [ -z "$NEWPART" ]; then
+    echo "ember-install: the partition was created but its device node never" >&2
+    echo "               appeared after 30s. The table IS modified; restore with:" >&2
+    echo "               dd if=$BK/mbr.bin of=$DISK bs=512 count=1" >&2
+    exit 1
+fi
 echo "   created $NEWPART"
 
 # ⛔ THE PROOF THAT NOTHING ELSE MOVED. Every line of the old table must still be
@@ -166,8 +316,17 @@ if [ "$missing" = 1 ]; then
     exit 1
 fi
 echo "   verified: every pre-existing partition entry is unchanged"
+fi   # end of the create-a-new-partition path; both paths meet here
 
-mkfs.ext4 -q -O ^metadata_csum_seed,^orphan_file -L ember "$NEWPART"
+# ⚠ THE LABEL IS LOAD-BEARING, not decoration: it is the only thing that lets a
+# later --reuse recognise this partition as ours rather than as somebody's data.
+#
+# ⛔ -F BECAUSE CONSENT WAS ALREADY TAKEN, and without it a reinstall HANGS.
+# mkfs.ext4 finds the previous filesystem, asks "Proceed anyway? (y,N)" and
+# waits — on an unattended run that is a stall with no output, and the operator
+# has already typed REINSTALL in full to a plan that said the partition would be
+# reformatted. Asking twice is not more careful, it is just stuck.
+mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L "$EMBER_LABEL" "$NEWPART"
 MNT=$(mktemp -d)
 mount "$NEWPART" "$MNT"
 

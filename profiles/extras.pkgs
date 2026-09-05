@@ -1,0 +1,22 @@
+# extras.pkgs — the things that make it feel like a desktop rather than a demo.
+#
+# ⚠ SuperTuxKart NEEDS OpenGL 3.3 FOR ITS NORMAL RENDERER and the target GPU
+# gives 2.1. It ships a fallback renderer that only needs OpenGL 2.1, so it does
+# run on a GeForce 7 through nouveau — without the shaders, lighting and effects.
+# If it refuses to start, that fallback is what to look for in its logs, not a
+# missing driver.
+#
+# ⛔ Extreme Tux Racer is NOT PACKAGED BY VOID, for any architecture. There is no
+# extremetuxracer, etr or tuxracer in the repository — checked, not assumed. It
+# would have to be built from source with xbps-src; it is not a line in this file.
+fastfetch
+supertuxkart
+supertuxkart-data
+# 2D, so it works regardless of what the GPU turns out to manage — worth having
+# on a machine whose graphics story is uncertain.
+#
+# ⚠ neverball was here and is gone: it is built for i686 but NOT for aarch64,
+# and this profile is shared by both. A package that exists on one architecture
+# and not the other has to go in an arch-specific file or not at all, and one
+# game is not worth splitting the profile over.
+supertux2
