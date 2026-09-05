@@ -1,0 +1,19 @@
+# arch-i686.pkgs — the 32-bit x86 half.
+#
+# ⚠ THE VIDEO DRIVERS ARE NAMED, NOT METAPACKAGED. A Pentium 4 has whatever GPU
+# it shipped with — i915, a Radeon of the era, an early GeForce, or nothing — and
+# which one decides whether there is any acceleration at all. vesa is the floor
+# and is always installed: it is what runs when none of the others bind.
+linux
+linux-firmware-network
+grub
+xf86-video-vesa
+xf86-video-fbdev
+xf86-video-intel
+xf86-video-ati
+xf86-video-nouveau
+mesa-dri
+# Legacy software is a stated requirement of this project, and on 32-bit x86 it
+# largely means Wine. Void carries it for i686, which almost nothing else does.
+wine
+wine-mono

@@ -1,0 +1,25 @@
+# desktop-min.pkgs — the tier for a machine with about a gigabyte.
+#
+# IceWM rather than XFCE, and that is the whole difference between this tier and
+# the next: XFCE's session, panel, settings daemon and file manager are four
+# resident processes before anything is opened. IceWM is one, it themes to look
+# like the era of the hardware it is running on, and it has a menu, a taskbar and
+# a window list, which is the whole of what a desktop has to have.
+#
+# ⚠ xorg-minimal, NOT xorg. `xorg` is a metapackage that pulls every video driver
+# in the tree plus fonts nobody asked for; on this tier that is most of the disk.
+# Drivers are named per architecture instead.
+xorg-minimal
+xorg-fonts
+xf86-input-libinput
+xinit
+icewm
+xterm
+pcmanfm
+gvfs
+gvfs-mtp
+alsa-utils
+alsa-plugins
+feh
+dillo
+xarchiver

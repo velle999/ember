@@ -1,0 +1,20 @@
+# base.pkgs — what every Ember image has, on every architecture.
+#
+# Void's own base-system pulls a kernel and firmware, which the Pi profiles
+# replace with their own; base-minimal plus the pieces named here is the
+# smallest thing that still boots, logs in and reaches a network.
+base-minimal
+runit-void
+dhcpcd
+iproute2
+iputils
+wpa_supplicant
+openssh
+ca-certificates
+util-linux
+e2fsprogs
+dosfstools
+nano
+less
+which
+xbps

@@ -1,0 +1,11 @@
+# arch-aarch64.pkgs — the Raspberry Pi half.
+#
+# ⛔ THE KERNEL IS PER MODEL AND THEY ARE NOT INTERCHANGEABLE. Void ships
+# rpi4-kernel and rpi5-kernel as separate packages; build/config.sh picks one.
+# There is an rpi4-base but NO rpi5-base in the repository — the Pi 5 takes the
+# generic rpi-base with rpi5-kernel beside it. Assuming symmetry here produces an
+# image that builds cleanly and does not boot.
+rpi-firmware
+rpi-userland
+mesa-dri
+xf86-video-fbdev

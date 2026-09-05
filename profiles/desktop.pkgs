@@ -1,0 +1,22 @@
+# desktop.pkgs — the tier for 2 GB and up, and the default on a Pi 4/5.
+#
+# XFCE because it is the heaviest desktop that is still honest about being
+# light, and because its settings UI means the machine can be configured
+# without a text editor.
+xorg-minimal
+xorg-fonts
+xf86-input-libinput
+xinit
+xfce4
+xfce4-terminal
+xfce4-pulseaudio-plugin
+lightdm
+lightdm-gtk3-greeter
+pipewire
+wireplumber
+alsa-pipewire
+NetworkManager
+network-manager-applet
+firefox
+mousepad
+ristretto
