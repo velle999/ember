@@ -8,6 +8,21 @@ xorg-fonts
 xf86-input-libinput
 xinit
 xfce4
+# ⚠ CAPITAL T, and the plugins are lowercase `thunar-*`. Lowercase `thunar` is
+# not a package at all — and querying for it is how this file briefly claimed
+# that xfce4 ships no file manager. It does: xfce4 depends on Thunar>=4.20 and
+# thunar-volman. Both are named here anyway, because a metapackage's contents
+# are not a promise, but neither was missing.
+Thunar
+thunar-volman
+thunar-archive-plugin
+# ⛔ THE REAL GAP: xfce4 pulls NEITHER gvfs NOR udisks2. Clicking a disk in a
+# file manager goes through gvfs to udisks2, so without them an internal
+# Windows partition simply never appears in the sidebar — the file manager is
+# working perfectly and has nothing to show. The only route to the data was a
+# manual mount as root.
+gvfs
+udisks2
 xfce4-terminal
 xfce4-pulseaudio-plugin
 lightdm

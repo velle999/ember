@@ -55,6 +55,7 @@ cp -a /out/rootfs/. /mnt/
 # The installer travels in the image, because the image IS the installer: you
 # boot it from a USB stick and it puts itself on a disk.
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
+install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 
 UUID=$(blkid -s UUID -o value "${LOOP}p1")
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > /mnt/etc/fstab
@@ -138,6 +139,10 @@ if [ "$TIER" = desktop ]; then
     ln -sf /etc/sv/polkitd        .
     ln -sf /etc/sv/NetworkManager .
     ln -sf /etc/sv/lightdm        .
+    # Mounting a disk from the desktop is udisks2 doing the work behind gvfs;
+    # with the service off, clicking a volume fails with a permission error
+    # that looks like a polkit problem and is not.
+    [ -d /etc/sv/udisks2 ] && ln -sf /etc/sv/udisks2 .
 else
     ln -sf /etc/sv/dhcpcd .
 fi

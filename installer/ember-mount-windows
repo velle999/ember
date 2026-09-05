@@ -1,0 +1,101 @@
+#!/bin/bash
+#
+# ember-mount-windows — reach the Windows partition from here, safely.
+#
+# ⛔ THE TRAP THIS EXISTS FOR DESTROYS DATA, and it is not obvious. If Windows
+# was hibernated, or shut down with fast-startup, its NTFS is left DIRTY: the
+# on-disk state is mid-transaction and Windows expects to resume into it.
+# Writing to that filesystem from Linux corrupts it, and Windows may then refuse
+# to boot. ntfs-3g refuses read-write on a dirty volume for exactly this reason
+# — and the "fix" people find online is to force it, which is how the corruption
+# actually happens.
+#
+# So this mounts READ-ONLY unless the volume is provably clean, and says which
+# it did and why.
+#
+# ⚠ XP has no fast-startup, so a properly shut down XP is normally clean. A
+# volume that is dirty anyway means it was not shut down properly, and that is
+# worth knowing before writing to it.
+#
+# Usage:
+#   ember-mount-windows            # find it, mount read-only at /mnt/windows
+#   ember-mount-windows --rw       # allow read-write IF the volume is clean
+#   ember-mount-windows --fstab    # print an /etc/fstab line and do nothing
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -euo pipefail
+
+WANT_RW=0; FSTAB_ONLY=0
+for a in "$@"; do
+    case "$a" in
+        --rw) WANT_RW=1 ;;
+        --fstab) FSTAB_ONLY=1 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        *) echo "ember-mount-windows: unknown argument $a" >&2; exit 2 ;;
+    esac
+done
+
+command -v ntfs-3g >/dev/null || { echo "ntfs-3g is not installed" >&2; exit 1; }
+
+# Every NTFS partition on a non-removable disk.
+mapfile -t PARTS < <(lsblk -pnro NAME,FSTYPE,RM,TYPE |
+                     awk '$2=="ntfs" && $3=="0" && $4=="part" {print $1}')
+if [ "${#PARTS[@]}" -eq 0 ]; then
+    echo "ember-mount-windows: no NTFS partition found on a fixed disk." >&2
+    lsblk -o NAME,SIZE,FSTYPE,LABEL | sed 's/^/  /' >&2
+    exit 1
+fi
+
+for DEV in "${PARTS[@]}"; do
+    LABEL=$(lsblk -no LABEL "$DEV" | tr -d ' ')
+    SIZE=$(lsblk -no SIZE "$DEV" | tr -d ' ')
+    UUID=$(blkid -s UUID -o value "$DEV" 2>/dev/null || true)
+    MP="/mnt/${LABEL:-windows}"
+    MP=${MP// /_}
+
+    echo "== $DEV  $SIZE  ${LABEL:-(no label)}"
+
+    if [ "$FSTAB_ONLY" = 1 ]; then
+        # ⚠ ro AND nofail. Read-only because an fstab entry mounts at every
+        # boot with no one watching, and nofail because a disk that has been
+        # removed must not stop the machine booting into an emergency shell.
+        echo "   UUID=$UUID  $MP  ntfs-3g  ro,nofail,uid=1000,gid=1000,umask=022,windows_names  0 0"
+        continue
+    fi
+
+    # ⛔ THE CLEANLINESS CHECK, and the whole point of this script.
+    # ntfs-3g.probe exits 0 when read-write is safe and non-zero when it is not
+    # (14 = hibernated, 12 = unclean/dirty). Asking it is the only honest way to
+    # know; mounting and hoping is not.
+    RW_OK=0
+    if command -v ntfs-3g.probe >/dev/null; then
+        if ntfs-3g.probe --readwrite "$DEV" >/dev/null 2>&1; then
+            RW_OK=1
+        else
+            code=$?
+            case $code in
+                14) reason="the volume is HIBERNATED — Windows expects to resume into it" ;;
+                12) reason="the volume is not cleanly unmounted (dirty)" ;;
+                *)  reason="ntfs-3g refuses read-write (probe code $code)" ;;
+            esac
+        fi
+    else
+        reason="ntfs-3g.probe is missing, so cleanliness cannot be established"
+    fi
+
+    mkdir -p "$MP"
+    if [ "$WANT_RW" = 1 ] && [ "$RW_OK" = 1 ]; then
+        mount -t ntfs-3g -o rw,uid=1000,gid=1000,umask=022,windows_names "$DEV" "$MP"
+        echo "   mounted READ-WRITE at $MP (the volume is clean)"
+    else
+        mount -t ntfs-3g -o ro "$DEV" "$MP"
+        echo "   mounted READ-ONLY at $MP"
+        if [ "$WANT_RW" = 1 ]; then
+            echo "   ⛔ read-write was REFUSED: $reason"
+            echo "      Boot Windows, shut it down fully, and try again."
+            echo "      Do NOT force it — writing to a dirty NTFS is what corrupts it."
+        else
+            echo "   (--rw would allow writing$([ "$RW_OK" = 1 ] && echo ", and this volume is clean" || echo "; but: $reason"))"
+        fi
+    fi
+done
