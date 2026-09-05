@@ -1,0 +1,11 @@
+# installer.pkgs — what ember-install needs to put the system on a disk.
+#
+# ⚠ ntfs-3g IS NOT OPTIONAL FOR A DUAL BOOT. os-prober identifies Windows by
+# MOUNTING the NTFS partition and looking for ntldr/boot.ini; without a driver
+# it cannot mount it, finds nothing, and GRUB is generated with no Windows entry
+# at all — an install that looks successful and has quietly hidden the other OS.
+ntfs-3g
+os-prober
+parted
+rsync
+gptfdisk

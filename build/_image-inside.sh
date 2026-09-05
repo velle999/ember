@@ -52,6 +52,10 @@ mkfs.ext4 -q -O ^metadata_csum_seed,^orphan_file -L "$HOSTNAME_" "${LOOP}p1"
 mount "${LOOP}p1" /mnt
 cp -a /out/rootfs/. /mnt/
 
+# The installer travels in the image, because the image IS the installer: you
+# boot it from a USB stick and it puts itself on a disk.
+install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
+
 UUID=$(blkid -s UUID -o value "${LOOP}p1")
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > /mnt/etc/fstab
 printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname

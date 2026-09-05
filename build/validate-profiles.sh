@@ -50,8 +50,8 @@ def names(f):
 # listed against both architectures on purpose: the tier is chosen per MACHINE
 # (a 1 GB Pi 4 wants the small one too), so both have to resolve on both.
 sets = {
-    "i686":    ["base", "desktop-min", "desktop", "arch-i686", "legacy-wine"],
-    "aarch64": ["base", "desktop-min", "desktop", "arch-aarch64"],
+    "i686":    ["base", "desktop-min", "desktop", "arch-i686", "legacy-wine", "installer"],
+    "aarch64": ["base", "desktop-min", "desktop", "arch-aarch64", "installer"],
 }
 bad = 0
 for arch, profs in sets.items():

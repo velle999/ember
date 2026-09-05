@@ -70,6 +70,7 @@ docker run --rm --privileged \
     -v /dev:/dev \
     -v "$PWD/$OUT:/out" \
     -v "$PWD/build/_image-inside.sh:/image-inside.sh:ro" \
+    -v "$PWD/installer:/installer:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
     -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" \

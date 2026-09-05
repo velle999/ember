@@ -81,12 +81,12 @@ fi
 
 case "$ARCH" in
     i686)
-        REPO="$VOID_REPO_I686"; EXTRA="profiles/arch-i686.pkgs"
+        REPO="$VOID_REPO_I686"; EXTRA="profiles/arch-i686.pkgs profiles/installer.pkgs"
         MODEL_PKGS="$KERNEL_I686"
         [ "$EMBER_WINE" = 1 ] && EXTRA="$EXTRA profiles/legacy-wine.pkgs"
         ;;
     aarch64)
-        REPO="$VOID_REPO_AARCH64"; EXTRA="profiles/arch-aarch64.pkgs"
+        REPO="$VOID_REPO_AARCH64"; EXTRA="profiles/arch-aarch64.pkgs profiles/installer.pkgs"
         MODEL_PKGS="$RPI_PKGS"
         ;;
 esac

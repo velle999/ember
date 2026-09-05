@@ -1,0 +1,227 @@
+#!/bin/bash
+#
+# ember-install — put the running system into unallocated space, beside an
+# existing OS, without touching it.
+#
+# ── The rule this whole script is built around ──────────────────────────────
+#
+# ⛔ IT NEVER WRITES INSIDE AN EXISTING PARTITION. It creates one partition in
+# free space, formats that, and installs a bootloader. Every destructive step is
+# fenced by a check that the target is unallocated, and the partition table is
+# read back and compared afterwards to prove nothing else moved.
+#
+# ⚠ THE ONE THING IT DOES TOUCH IS THE MBR, because a bootloader has to live
+# there for the BIOS to find it. So the MBR and the partition table are BACKED
+# UP FIRST, to two places, and the restore command is printed. Restoring the old
+# boot sector puts the machine back exactly as it was.
+#
+# ⚠ Windows XP is the case this was written for: MBR, BIOS, NTFS, and an
+# expectation that its own boot sector is where it left it. Nothing here moves,
+# resizes or writes to an NTFS partition.
+#
+# Usage:
+#   ember-install --plan            # show the disk, the free space and the plan
+#   ember-install /dev/sda          # do it, with a confirmation prompt
+#   ember-install --yes /dev/sda    # no prompt (for the test rig)
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -euo pipefail
+
+PLAN_ONLY=0; ASSUME_YES=0; DISK=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --plan) PLAN_ONLY=1 ;;
+        --yes|-y) ASSUME_YES=1 ;;
+        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+        /dev/*) DISK=$1 ;;
+        *) echo "ember-install: unknown argument $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+[ "$(id -u)" = 0 ] || { echo "ember-install: run me as root" >&2; exit 1; }
+for t in parted sfdisk mkfs.ext4 rsync grub-install grub-mkconfig blkid lsblk; do
+    command -v "$t" >/dev/null || { echo "ember-install: $t is missing" >&2; exit 1; }
+done
+
+# ── pick the disk ───────────────────────────────────────────────────────────
+if [ -z "$DISK" ]; then
+    # The biggest non-removable disk. Removable is excluded on purpose: the
+    # system is very likely running FROM a USB stick right now, and offering to
+    # install onto the thing you booted off is how people lose an afternoon.
+    DISK=$(lsblk -dnro NAME,SIZE,RM,TYPE | awk '$3=="0" && $4=="disk" {print "/dev/"$1}' | head -1)
+fi
+[ -b "$DISK" ] || { echo "ember-install: $DISK is not a block device" >&2; exit 1; }
+
+echo "== target disk: $DISK"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS "$DISK" | sed 's/^/   /'
+echo
+
+LABEL_TYPE=$(parted -sm "$DISK" print 2>/dev/null | awk -F: 'NR==2 {print $6}')
+echo "   partition table: ${LABEL_TYPE:-unknown}"
+if [ "$LABEL_TYPE" != msdos ]; then
+    echo "ember-install: this disk is '$LABEL_TYPE', not msdos/MBR." >&2
+    echo "               Windows XP requires MBR, so this is not the disk XP is on," >&2
+    echo "               or something has changed. Refusing rather than guessing." >&2
+    exit 1
+fi
+
+# ⛔ FOUR PRIMARIES IS THE MBR'S HARD LIMIT and there is no way round it here.
+# Better to say so than to have parted fail halfway through a partition table
+# rewrite on the disk holding somebody's XP install.
+nprim=$(parted -sm "$DISK" print 2>/dev/null | awk -F: 'NR>2 && $1 ~ /^[0-9]+$/ {n++} END {print n+0}')
+echo "   existing partitions: $nprim"
+if [ "$nprim" -ge 4 ]; then
+    echo "ember-install: the MBR already holds 4 partitions, its hard limit." >&2
+    echo "               Nothing can be added without deleting one. Refusing." >&2
+    exit 1
+fi
+
+# ── find the free space ─────────────────────────────────────────────────────
+# parted reports unallocated regions as 'free' entries; the largest is taken.
+read -r FREE_START FREE_END FREE_SIZE <<EOF
+$(parted -sm "$DISK" unit MiB print free 2>/dev/null |
+  awk -F: '$5=="free;" {gsub(/MiB/,"",$2); gsub(/MiB/,"",$3); gsub(/MiB/,"",$4);
+                        if ($4+0 > m) {m=$4+0; s=$2; e=$3}}
+           END {printf "%d %d %d", s, e, m}')
+EOF
+NEEDED=$(( $(du -sm --one-file-system / | cut -f1) + 1024 ))
+
+echo "   largest free region: ${FREE_SIZE} MiB  (${FREE_START} MiB → ${FREE_END} MiB)"
+echo "   this system needs:   ${NEEDED} MiB"
+
+# ⚠ Aligned to the next MiB boundary. XP-era tables start partitions at sector
+# 63 for CHS reasons; a modern partition placed on a MiB boundary next to one of
+# those is fine, and misaligning to "match" it would only cost performance.
+#
+# ⛔ AND THE END IS ONE MiB SHORT OF WHAT parted REPORTS. `print free` gives the
+# last boundary of the region, which for the final region IS the end of the
+# disk — and passing that straight to mkpart fails with "The location 12288MiB
+# is outside of the device". Found by build/install-test.sh, which is exactly
+# the failure that would otherwise have happened on somebody's real disk halfway
+# through an install, after the MBR backup and before anything useful.
+START=$(( FREE_START + 1 ))
+END=$(( FREE_END - 1 ))
+USABLE=$(( END - START ))
+
+# Checked against the range actually being asked for, not the raw region: those
+# differ by the two MiB trimmed above, and a check on the wrong one passes a
+# build that then fails at mkpart.
+if [ "${USABLE:-0}" -lt "$NEEDED" ]; then
+    echo "ember-install: not enough unallocated space — ${USABLE} MiB usable, ${NEEDED} MiB needed." >&2
+    exit 1
+fi
+
+cat <<PLAN
+
+   PLAN
+     · create ONE new primary partition, ${START} MiB → ${END} MiB
+     · format it ext4, label "$(hostname)"
+     · copy this running system onto it
+     · back up the MBR and the partition table, then install GRUB to $DISK
+     · enable os-prober so the existing OS gets its own menu entry
+
+   NOT TOUCHED: every existing partition, and every byte inside them.
+
+PLAN
+
+[ "$PLAN_ONLY" = 1 ] && exit 0
+
+if [ "$ASSUME_YES" != 1 ]; then
+    printf '   Type INSTALL to proceed: '
+    read -r reply
+    [ "$reply" = INSTALL ] || { echo "   aborted."; exit 1; }
+fi
+
+# ── back up before anything is written ──────────────────────────────────────
+BK=/root/ember-install-backup
+mkdir -p "$BK"
+dd if="$DISK" of="$BK/mbr.bin" bs=512 count=1 status=none
+sfdisk -d "$DISK" > "$BK/partition-table.sfdisk" 2>/dev/null || true
+BEFORE_TABLE=$(sfdisk -d "$DISK" 2>/dev/null | grep -v '^label-id' || true)
+echo "   backed up the MBR and partition table to $BK"
+
+# ── the new partition ───────────────────────────────────────────────────────
+parted -s "$DISK" mkpart primary ext4 "${START}MiB" "${END}MiB"
+partprobe "$DISK" 2>/dev/null || true
+sleep 2
+
+NEWNUM=$(parted -sm "$DISK" print 2>/dev/null | awk -F: 'NR>2 && $1 ~ /^[0-9]+$/ {n=$1} END {print n}')
+NEWPART="${DISK}${NEWNUM}"
+[ -b "$NEWPART" ] || NEWPART="${DISK}p${NEWNUM}"
+[ -b "$NEWPART" ] || { echo "ember-install: cannot find the new partition" >&2; exit 1; }
+echo "   created $NEWPART"
+
+# ⛔ THE PROOF THAT NOTHING ELSE MOVED. Every line of the old table must still be
+# present in the new one; the only permitted difference is the added partition.
+AFTER_TABLE=$(sfdisk -d "$DISK" 2>/dev/null | grep -v '^label-id' || true)
+missing=0
+while IFS= read -r line; do
+    case "$line" in ""|label*|device*|unit*|sector-size*|first-lba*|last-lba*|grain*) continue ;; esac
+    printf '%s\n' "$AFTER_TABLE" | grep -qF -- "$line" || { echo "   CHANGED: $line" >&2; missing=1; }
+done <<< "$BEFORE_TABLE"
+if [ "$missing" = 1 ]; then
+    echo "ember-install: an existing partition entry changed. STOPPING." >&2
+    echo "               Restore with: dd if=$BK/mbr.bin of=$DISK bs=512 count=1" >&2
+    exit 1
+fi
+echo "   verified: every pre-existing partition entry is unchanged"
+
+mkfs.ext4 -q -O ^metadata_csum_seed,^orphan_file -L ember "$NEWPART"
+MNT=$(mktemp -d)
+mount "$NEWPART" "$MNT"
+
+echo "   copying the system (this takes a while)"
+rsync -aHAXx --info=progress2 \
+      --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/ \
+      --exclude=/tmp/ --exclude=/mnt/ --exclude=/media/ --exclude="$MNT" \
+      / "$MNT/"
+mkdir -p "$MNT"/{proc,sys,dev,run,tmp,mnt,media}
+chmod 1777 "$MNT/tmp"
+
+UUID=$(blkid -s UUID -o value "$NEWPART")
+printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > "$MNT/etc/fstab"
+cp -a "$BK" "$MNT/root/" 2>/dev/null || true
+
+for d in dev proc sys; do mount --bind "/$d" "$MNT/$d"; done
+
+# ⛔ os-prober MUST BE TURNED ON EXPLICITLY. Modern GRUB disables it by default
+# — our own build log says so: "Warning: os-prober will not be executed to
+# detect other bootable partitions." Leaving it off produces a grub.cfg with no
+# Windows entry, which does not look like a failure. It looks like XP is gone.
+sed -i '/^GRUB_DISABLE_OS_PROBER=/d' "$MNT/etc/default/grub"
+echo 'GRUB_DISABLE_OS_PROBER=false' >> "$MNT/etc/default/grub"
+
+chroot "$MNT" /bin/bash -euc "
+    dracut --force --no-hostonly
+    grub-install --target=i386-pc --boot-directory=/boot --recheck '$DISK'
+    grub-mkconfig -o /boot/grub/grub.cfg
+"
+
+# ── did the other OS survive into the menu? ─────────────────────────────────
+others=$(grep -ciE "windows|microsoft" "$MNT/boot/grub/grub.cfg" || true)
+if [ "$others" -gt 0 ]; then
+    echo "   os-prober found the existing OS — $others menu entr(y|ies) for it"
+else
+    echo
+    echo "   ⚠ NO WINDOWS ENTRY IN THE BOOT MENU." >&2
+    echo "     The install is fine and XP's partition is untouched, but GRUB did" >&2
+    echo "     not detect it. Usually ntfs-3g is missing or the NTFS partition is" >&2
+    echo "     unclean (XP hibernated or fast-shut-down leaves it dirty)." >&2
+    echo "     Boot XP once, shut it down fully, then re-run:  grub-mkconfig -o /boot/grub/grub.cfg" >&2
+    echo "     To get XP back immediately:  dd if=$BK/mbr.bin of=$DISK bs=512 count=1" >&2
+fi
+
+for d in dev proc sys; do umount "$MNT/$d" 2>/dev/null || true; done
+umount "$MNT"; rmdir "$MNT"
+sync
+
+cat <<DONE
+
+   Installed to $NEWPART (UUID $UUID).
+   The old boot sector is saved at $BK/mbr.bin — to undo the bootloader
+   change entirely and go straight back to XP:
+
+       dd if=$BK/mbr.bin of=$DISK bs=512 count=1
+
+DONE
