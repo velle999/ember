@@ -110,6 +110,41 @@ for d in /sys/class/drm/card*/device/driver; do
     [ -e "$d" ] || continue
     emit kms_driver "$(basename "$(readlink -f "$d")")"
 done
+
+# ── WHICH CHIP, WHICH DRIVER GENERATION ─────────────────────────────────────
+#
+# ⛔ THE ANSWER TO "WILL THIS ACCELERATE" IS THE CHIP, NOT THE VENDOR. On NVIDIA
+# especially: nouveau is three drivers wearing one name, and which one a card
+# lands on decides whether Mesa has anything for it —
+#
+#   nv30  GeForce FX / 6 / 7 (NV30-G7x)   — present in Mesa 26, OpenGL 2.1-ish
+#   nv50  GeForce 8 / 9 / 200 / 300       — the best-supported old generation
+#   nvc0  GeForce 400 and later
+#
+# and anything older than NV30 has no Gallium driver at all any more. The
+# proprietary legacy blobs (304.xx for GeForce 6/7, 340.xx for 8/9/200) do not
+# build against a 6.x kernel, so nouveau is not a preference here, it is the
+# only option.
+#
+# Read from sysfs rather than lspci, which these machines do not have installed.
+for u in /sys/class/drm/card*/device/uevent; do
+    [ -e "$u" ] || continue
+    pciid=$(sed -n 's/^PCI_ID=//p' "$u" | head -1)
+    [ -n "$pciid" ] && emit gpu_pci_id "$pciid" "vendor:device — 10DE is NVIDIA, 8086 Intel, 1002 AMD/ATI"
+done
+# The kernel names the chip itself when nouveau binds; that line is worth more
+# than any id lookup because it is the driver's own answer.
+if command -v dmesg >/dev/null 2>&1; then
+    chip=$(dmesg 2>/dev/null | grep -iom1 'NVIDIA NV[0-9A-F]*' | head -1)
+    [ -n "$chip" ] && emit nouveau_chip "$chip" "the kernel's own identification of the silicon"
+fi
+# And if there is a running GL stack, its renderer string ends the argument.
+if command -v glxinfo >/dev/null 2>&1; then
+    r=$(glxinfo -B 2>/dev/null | sed -n 's/^ *OpenGL renderer string: *//p' | head -1)
+    v=$(glxinfo -B 2>/dev/null | sed -n 's/^ *OpenGL version string: *//p' | head -1)
+    [ -n "$r" ] && emit gl_renderer "$r" "if this says llvmpipe, GL is running on the CPU"
+    [ -n "$v" ] && emit gl_version  "$v"
+fi
 # simpledrm/efifb is the kernel's generic framebuffer: a display, no acceleration.
 grep -qs simpledrm /proc/modules && \
     emit note "simpledrm is loaded — that is the generic framebuffer, not a GPU driver"

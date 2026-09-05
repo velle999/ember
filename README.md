@@ -54,15 +54,22 @@ Wayland is available on 32-bit if the hardware turns out to take it.
 Void also brings **runit** instead of systemd, which on a 1 GB machine is not a
 philosophical preference.
 
-## Where this is uncertain
+## The machines
 
-⚠ **The Pentium 4 is not yet proven to run a graphical desktop.** It has SSE2,
-which is Mesa's llvmpipe floor, so software GL *can* run — but "can run" and
-"is usable on a single-core P4" are different claims and only one of them has
-been measured. The older laptop is a bigger question: pre-2001 x86 has no SSE2
-at all, which is a hard blocker for any GL path.
+**The Pentium 4** — hyper-threaded, with a **GeForce 7600 GS AGP** and 512 MB of
+video memory. Better than feared: the card gets a real hardware GL driver
+(nouveau's `nv30`, verified present in Mesa 26.1.8), so this is not a
+software-rendering machine. See [docs/target-p4.md](docs/target-p4.md) for the
+graphics analysis and the AGP caveats.
 
-**Run `tools/hw-probe.sh` on both machines before any more of this is built.**
+⚠ Its **system RAM is still unmeasured** — the 512 MB is the card — and that is
+what picks the desktop tier.
+
+**A 1992 Compaq is out of scope.** It is not currently powering on, and 386/486
+era hardware has no SSE2 and therefore no path to any GL desktop; supporting it
+would be a different project with a framebuffer UI.
+
+**Run `tools/hw-probe.sh` on the P4 before any more of this is built.**
 It is POSIX sh with no dependencies, so it runs from any live USB, and it
 reports the four things that decide the design: SSE2, RAM, whether there is a
 real KMS driver or only a framebuffer, and BIOS vs UEFI.
