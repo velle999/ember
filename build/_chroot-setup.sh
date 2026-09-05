@@ -50,6 +50,29 @@ chmod 440 /etc/sudoers.d/wheel
 # ── the bootloader, which is the ONLY part that differs ─────────────────────
 case "$BOOTLOADER" in
 grub)
+    # ⛔ THE AGP CHIPSET BACKENDS MUST BE IN THE INITRAMFS, or an AGP card runs
+    # at PCI speed for ever. nouveau is loaded FROM the initramfs, and dracut
+    # includes agpgart (the core) but none of the per-chipset backends — so on
+    # the reference machine nouveau probed at 4.3s, found no AGP bridge and fell
+    # back to PCI, and via-agp only turned up at 6.8s from the root filesystem,
+    # two and a half seconds too late to be of any use.
+    #
+    # The measured difference on a VIA PT890 with a GeForce 7600 GS:
+    #     before   nouveau: pci: failed to acquire agp     GART: 128 MiB
+    #     after    nouveau: putting AGP V3 device into 8x mode   GART: 512 MiB
+    # which is roughly 133 MB/s against 2.1 GB/s to the card, and it presented
+    # as CPU-bound stutter in games that should have run fine.
+    #
+    # ⚠ A softdep in /etc/modprobe.d does NOT fix this. The root filesystem is
+    # not consulted by the initramfs, so the ordering has to be solved by what
+    # is IN the initramfs. Tried that first; it changed nothing.
+    #
+    # All four backends are named because the right one depends on the board and
+    # loading a non-matching one is harmless — it simply does not bind.
+    mkdir -p /etc/dracut.conf.d
+    printf 'add_drivers+=" via-agp intel-agp sis-agp amd64-agp "\n' \
+        > /etc/dracut.conf.d/50-ember-agp.conf
+
     # ⛔ REGENERATED --no-hostonly. The initramfs already in the rootfs was built
     # inside a container against the CONTAINER's hardware; a hostonly image made
     # there carries that machine's storage drivers and not the target's, and the
@@ -85,6 +108,18 @@ esac
 cd /etc/runit/runsvdir/default
 ln -sf /etc/sv/dbus  .
 ln -sf /etc/sv/udevd .
+# ⛔ sshd, ON BOTH TARGETS. It was enabled on the Pi image and NOT on the PC one,
+# and neither was deliberate: Void's rpi4-base package enables sshd, dhcpcd and
+# ntpd on the ARM side, so the asymmetry came from a dependency rather than from
+# a decision. The consequence was a Pentium 4 sitting on the network, pinging in
+# 1.3 ms, with no way in — on a machine whose whole purpose is being debugged
+# remotely because its own display is what we are fixing.
+#
+# ⚠ THE DEFAULT PASSWORD IS KNOWN. ember/ember with sshd listening is fine on a
+# home LAN and is NOT fine anywhere else; anyone putting one of these on a
+# network they do not control should change it first. Stated here because a
+# default that ships open should say so out loud.
+ln -sf /etc/sv/sshd  .
 # ⚠ A getty on the serial line, or the console is write-only. Void's six agettys
 # are all on VGA tty1-6. On the Pi the serial line is ttyAMA0, not ttyS0.
 [ -d /etc/sv/agetty-ttyS0 ]  && ln -sf /etc/sv/agetty-ttyS0  . || true

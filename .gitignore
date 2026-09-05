@@ -2,5 +2,6 @@ out/
 *.img
 *.iso
 *.ppm
-# Fetched from libretro's buildbot by build/fetch-cores.sh — binaries, not source.
 cores/
+# Wi-Fi credentials — never committed.
+installer/wifi.nmconnection

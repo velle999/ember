@@ -100,6 +100,21 @@ printf 'root=PARTUUID=%s-02 rw rootwait fsck.repair=yes console=ttyAMA0,115200 c
     echo 'arm_64bit=1'
     echo 'enable_uart=1'
     echo 'disable_overscan=1'
+    # ⛔ max_framebuffers=2 AND disable_fw_kms_setup=1, both of which Raspberry
+    # Pi OS ships as standard on a Pi 4 and neither of which was here.
+    #
+    # Without disable_fw_kms_setup the FIRMWARE performs the KMS setup, brings
+    # up a simple-framebuffer and passes the kernel a mode on the command line
+    # (video=HDMI-A-1:3840x2160M@30, read off the TV's EDID). vc4 then has to
+    # take a display the firmware has already configured, and on this hardware
+    # its component bind never completed: the log showed the hvs binding over
+    # and over with no "[drm] Initialized vc4" following, so no DRM device
+    # existed, so elogind created no seat with graphics, so lightdm sat
+    # "Monitoring logind for seats" for ever and X never started.
+    #
+    # max_framebuffers=2 is what a Pi 4 needs for its two HDMI controllers.
+    echo 'max_framebuffers=2'
+    echo 'disable_fw_kms_setup=1'
 } >> /mnt/boot/config.txt
 
 # ⛔ ONE vc4 OVERLAY. NOT TWO. An earlier version APPENDED
@@ -113,9 +128,9 @@ printf 'root=PARTUUID=%s-02 rw rootwait fsck.repair=yes console=ttyAMA0,115200 c
 #
 # So the generic line is REPLACED in place, and only if the specific overlay
 # actually exists.
-if [ -f "/mnt/boot/overlays/vc4-kms-v3d-pi${RPI_MODEL_N}.dtbo" ]; then
-    sed -i "s/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d-pi${RPI_MODEL_N}/" /mnt/boot/config.txt
-fi
+# ⚠ THE GENERIC OVERLAY, NOT THE -pi4 VARIANT. Raspberry Pi OS uses
+# dtoverlay=vc4-kms-v3d on a Pi 4 and the firmware selects the right one; forcing
+# -pi4 was my assumption and it did not help. Left generic deliberately.
 # And prove there is exactly one, because this is the failure that produced a
 # machine with no picture at all.
 n=$(grep -c '^dtoverlay=vc4-kms-v3d' /mnt/boot/config.txt)
@@ -142,7 +157,22 @@ install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
 install -Dm755 /installer/ember-expand-root /mnt/usr/bin/ember-expand-root
+# ⚠ OPTIONAL AND GITIGNORED. Drop a NetworkManager keyfile at
+# installer/wifi.nmconnection and every image built afterwards joins the network
+# on first boot — which is the difference between a headless machine you can ssh
+# to and one you must carry a monitor to. It holds a PSK, so it is in .gitignore
+# and must never be committed.
+#
+# ⛔ 0600 root:root OR NETWORKMANAGER IGNORES IT ENTIRELY, logging "ignoring
+# insecure configuration file" and behaving exactly as though no connection had
+# been configured at all.
+if [ -f /installer/wifi.nmconnection ]; then
+    install -Dm600 -o 0 -g 0 /installer/wifi.nmconnection \
+        /mnt/etc/NetworkManager/system-connections/wifi.nmconnection
+    echo "inside: wifi connection pre-seeded"
+fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
+install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
 # ── libretro cores ──────────────────────────────────────────────────────────

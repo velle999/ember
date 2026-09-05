@@ -58,7 +58,22 @@ install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
 install -Dm755 /installer/ember-expand-root /mnt/usr/bin/ember-expand-root
+# ⚠ OPTIONAL AND GITIGNORED. Drop a NetworkManager keyfile at
+# installer/wifi.nmconnection and every image built afterwards joins the network
+# on first boot — which is the difference between a headless machine you can ssh
+# to and one you must carry a monitor to. It holds a PSK, so it is in .gitignore
+# and must never be committed.
+#
+# ⛔ 0600 root:root OR NETWORKMANAGER IGNORES IT ENTIRELY, logging "ignoring
+# insecure configuration file" and behaving exactly as though no connection had
+# been configured at all.
+if [ -f /installer/wifi.nmconnection ]; then
+    install -Dm600 -o 0 -g 0 /installer/wifi.nmconnection \
+        /mnt/etc/NetworkManager/system-connections/wifi.nmconnection
+    echo "inside: wifi connection pre-seeded"
+fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
+install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
 # ── libretro cores ──────────────────────────────────────────────────────────
