@@ -30,7 +30,32 @@ LIVE="out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER/$EMBER_ID-$EMBER_VERSION-$ARCH-$T
 command -v qemu-system-i386 >/dev/null || { echo "SKIP: qemu-system-i386"; exit 77; }
 docker info >/dev/null 2>&1 || { echo "install-test: docker is not running" >&2; exit 1; }
 
-T="out/install-test"; rm -rf "$T"; mkdir -p "$T"
+# ⛔ LOOP DEVICES OUTLIVE THE CONTAINER THAT MADE THEM. They are the host
+# kernel's, not the container's, so a privileged container that dies before its
+# trap fires leaves them attached — and because this script deletes its own
+# target.img afterwards, they end up pinning DELETED files. Six of them
+# accumulated across the failed runs that got this rig working, and they showed
+# up in the user's own `lsblk` as mysterious NTFS volumes labelled XPDISK.
+#
+# So stale loops are cleared before starting and again on the way out, keyed on
+# the backing file so nothing belonging to anyone else is touched.
+detach_stale_loops() {
+    local found=""
+    for l in /sys/block/loop*/loop/backing_file; do
+        [ -e "$l" ] || continue
+        case "$(cat "$l" 2>/dev/null)" in
+            */target.img*|*/live.img*) found="$found /dev/$(echo "$l" | cut -d/ -f4)" ;;
+        esac
+    done
+    [ -n "$found" ] || return 0
+    docker run --rm --privileged -v /dev:/dev "$VOID_IMAGE" /bin/sh -c \
+        "for d in $found; do losetup -d \$d 2>/dev/null || true; done" >/dev/null 2>&1 || true
+}
+
+T="out/install-test"
+detach_stale_loops
+trap detach_stale_loops EXIT
+rm -rf "$T"; mkdir -p "$T"
 TARGET="$T/target.img"
 
 echo "== building a stand-in XP disk"
