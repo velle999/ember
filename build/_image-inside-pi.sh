@@ -100,15 +100,26 @@ printf 'root=PARTUUID=%s-02 rw rootwait fsck.repair=yes console=ttyAMA0,115200 c
     echo 'arm_64bit=1'
     echo 'enable_uart=1'
     echo 'disable_overscan=1'
-    # ⚠ Model-specific KMS overlay. Void ships vc4-kms-v3d-pi4.dtbo and
-    # vc4-kms-v3d-pi5.dtbo alongside the generic one; the generic overlay is
-    # written by the rpi packages and the specific one is appended after it, so
-    # the later line wins. On a Pi 4 the -pi4 variant is what drives both HDMI
-    # outputs at full clock.
-    if [ -f "/mnt/boot/overlays/vc4-kms-v3d-pi${RPI_MODEL_N}.dtbo" ]; then
-        echo "dtoverlay=vc4-kms-v3d-pi${RPI_MODEL_N}"
-    fi
 } >> /mnt/boot/config.txt
+
+# ⛔ ONE vc4 OVERLAY. NOT TWO. An earlier version APPENDED
+# dtoverlay=vc4-kms-v3d-pi4 after the generic dtoverlay=vc4-kms-v3d that the rpi
+# packages write, on the belief that "the later line wins". It does not — every
+# dtoverlay line APPLIES an overlay, so both were applied, the device tree was
+# configured for vc4 twice, and the component bind never completed: the log
+# showed "vc4-drm gpu: bound fe400000.hvs" over and over with no
+# "[drm] Initialized vc4" ever following it. No DRM device, so X had nothing to
+# draw on and the console stayed on the firmware's 720x576 simple-framebuffer.
+#
+# So the generic line is REPLACED in place, and only if the specific overlay
+# actually exists.
+if [ -f "/mnt/boot/overlays/vc4-kms-v3d-pi${RPI_MODEL_N}.dtbo" ]; then
+    sed -i "s/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d-pi${RPI_MODEL_N}/" /mnt/boot/config.txt
+fi
+# And prove there is exactly one, because this is the failure that produced a
+# machine with no picture at all.
+n=$(grep -c '^dtoverlay=vc4-kms-v3d' /mnt/boot/config.txt)
+[ "$n" = 1 ] || { echo "mkimage: $n vc4 overlays in config.txt, expected 1" >&2; exit 1; }
 
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n'          "$ROOTUUID" >  /mnt/etc/fstab
 printf 'UUID=%s\t/boot\tvfat\tdefaults,nofail\t0 2\n'       "$BOOTUUID" >> /mnt/etc/fstab

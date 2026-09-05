@@ -23,6 +23,11 @@ dosfstools
 # been written to a card larger than itself. It is built for growing a MOUNTED
 # partition, which is what the running root is.
 cloud-guest-utils
+# ⚠ lspci. On hardware this old, identifying the host bridge and the graphics
+# card is the first step of nearly every diagnosis, and its absence cost a round
+# trip chasing an AGP fallback on the Pentium 4.
+pciutils
+usbutils
 sudo
 nano
 less

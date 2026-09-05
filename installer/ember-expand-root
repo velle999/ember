@@ -49,10 +49,25 @@ DISK=$(lsblk -no PKNAME "$ROOTDEV" 2>/dev/null | head -1)
 [ -n "$DISK" ] && [ -b "/dev/$DISK" ] || { note "cannot find the parent disk; not expanding"; done_; }
 
 # ⛔ THE LAST PARTITION, OR NOTHING. Growing a partition that has another after
-# it would run straight into that partition's data. On this image root is second
-# of two, but the check is on the disk as found, not on what we shipped.
-LAST=$(lsblk -no NAME "/dev/$DISK" | tail -n +2 | sed 's/[^0-9]*//' | sort -n | tail -1)
-[ "$PARTNUM" = "$LAST" ] || { note "root is partition $PARTNUM of $LAST; not the last, refusing"; done_; }
+# it would run straight into that partition's data.
+#
+# ⛔ READ FROM sysfs, NEVER PARSE lsblk's TREE OUTPUT. This was
+# `lsblk -no NAME | sed 's/[^0-9]*//'`, which strips the leading non-digits — and
+# on an SD card the device is mmcblk0p2, so it yielded "0p2" instead of "2". On
+# /dev/sda1 the same expression accidentally gives "1" and works, which is why
+# it passed on the PC and silently refused on every Pi: root is partition 2, of
+# a "last partition" reported as 0p2, so the numbers never matched.
+LAST=$(for f in /sys/class/block/"$DISK"*/partition; do
+           [ -e "$f" ] && cat "$f"
+       done | sort -n | tail -1)
+if [ "$PARTNUM" != "$LAST" ]; then
+    # ⚠ NO MARKER on a layout refusal. Writing one made a false negative
+    # permanent — the bug above meant every Pi decided, once and for ever, that
+    # its root was not the last partition. A refusal we might be wrong about
+    # must be allowed to reconsider on the next boot.
+    note "root is partition $PARTNUM but the last is $LAST; refusing"
+    exit 0
+fi
 
 DISK_SECT=$(cat "/sys/class/block/$DISK/size" 2>/dev/null || echo 0)
 PART_START=$(cat "/sys/class/block/$RNAME/start" 2>/dev/null || echo 0)

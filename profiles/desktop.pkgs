@@ -5,6 +5,11 @@
 # without a text editor.
 xorg-minimal
 xorg-fonts
+# ⚠ glxinfo lives here, and on hardware this old it is the FIRST thing anyone
+# needs: "is this the real driver or llvmpipe" is the question behind most
+# performance complaints, and without it there is no way to ask. Its absence
+# cost a round trip on the Pentium 4.
+mesa-demos
 xf86-input-libinput
 xinit
 xfce4
