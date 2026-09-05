@@ -77,12 +77,39 @@ sh tools/hw-probe.sh          # readable
 sh tools/hw-probe.sh --tsv    # to paste back
 ```
 
+## Building
+
+Needs docker (for xbps) and, to test, qemu.
+
+```sh
+build/validate-profiles.sh          # every package name still exists, per arch
+build/mkrootfs.sh i686 desktop      # ~2.7 GB rootfs  (EMBER_WINE=0 → ~1.9 GB)
+build/mkimage.sh  i686 desktop      # bootable MBR/BIOS disk image
+build/boot-test.sh                  # does it boot?      (qemu, serial console)
+build/desktop-test.sh               # does a desktop draw? (qemu, framebuffer)
+```
+
+**Status: the i686 image boots to a working lightdm greeter**, verified in qemu
+with an IDE disk — 6/6 on the boot rig and 3/3 on the desktop rig. It has not
+yet run on the real machine, and the one thing qemu cannot tell us is whether
+nouveau is happy on that GeForce: qemu renders on a Bochs VGA in software, so a
+pass proves X, lightdm and the session are configured correctly and proves
+nothing about the actual card.
+
+Write it to a disk or USB stick with the `dd` line `mkimage.sh` prints. Default
+login is `ember` / `ember`, root shares the password, and there is a serial
+console on ttyS0 with a getty on it — on a machine of this era that is the
+difference between debugging it and carrying it to a desk.
+
+The Pi image is not built yet: it is not a BIOS disk image but a FAT firmware
+partition plus `config.txt`, and it needs qemu-user-static for the ARM chroot.
+
 ## Layout
 
 ```
 tools/hw-probe.sh    what will this machine actually run
 profiles/            package sets, per architecture and per weight tier
-build/               rootfs and image builders
+build/               rootfs and image builders, and the two qemu rigs
 docs/                design notes
 ```
 
