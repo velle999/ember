@@ -1,117 +1,182 @@
 # Ember
 
 A small graphical desktop for machines the rest of the world has stopped
-building for: 32-bit x86 (Pentium 4 era) and the Raspberry Pi 4/5.
+building for: 32-bit x86 of the Pentium 4 era, and the Raspberry Pi 4/5.
 
-**`Ember` is a working name.** It appears in exactly one place —
-`build/config.sh` — so changing it is one line.
-
-## What it is
-
-A Void Linux derivative. Not a new distribution from scratch: a package set, a
-desktop configuration, and an image builder on top of a base that already does
-the hard part.
+It boots, it installs itself beside Windows XP without touching it, and it runs
+Wine. **x86_64 is deliberately not a target.**
 
 | | |
 |---|---|
 | **Targets** | `i686` (Pentium 4 and later 32-bit x86), `aarch64` (Raspberry Pi 4 / 5) |
 | **Base** | Void Linux — glibc, runit, rolling |
-| **Not a target** | x86_64. Deliberately. |
+| **Desktop** | XFCE, or an IceWM tier for ~1 GB machines |
+| **Status** | i686 **boots on real hardware**; the Pi image is not built yet |
+
+Not a distribution from scratch: a package set, a desktop configuration, an
+image builder and an installer, on top of a base that already does the hard
+part.
 
 ## Why Void, and not the obvious answers
 
-This was decided by measurement, on 2026-09-05. The numbers are here so the
-decision can be re-argued later against facts rather than memory.
+Decided by measurement on 2026-09-05, recorded so it can be re-argued later
+against facts rather than memory.
 
 **Debian is out, and this is the decisive fact.** Debian 13 "trixie" dropped
-i386 entirely — no kernel, no installer. Worse, its remaining i386 packages are
-built *requiring SSE2* and are intended only for multiarch on an amd64 host, so
-they will not run on much of the 32-bit hardware Debian 12 supported. Debian 12
-"bookworm" still has a real i386 port, but it is on LTS until June 2028 and then
-gone. Starting a new project on it means starting on a two-year fuse.
+i386 entirely — no kernel, no installer. Its remaining i386 packages are built
+*requiring SSE2* and intended only for multiarch on an amd64 host, so they will
+not run on much of the hardware Debian 12 supported. Debian 12 has a real i386
+port, but it is on LTS until June 2028 and then gone.
 
-**Arch is out.** Arch dropped i686 in 2017. `archlinux32` exists, but it lags
-upstream badly and does not carry the modern graphics stack.
+**Arch is out.** It dropped i686 in 2017; `archlinux32` lags badly and lacks the
+modern graphics stack.
 
 **Alpine is out**, despite fitting the hardware beautifully — it is musl, and
 the requirement here is *running legacy software*, which means glibc.
 
-**Void is in**, and the case is empirical:
+**Void is in**, empirically:
 
 | | i686 | aarch64 |
 |---|---|---|
 | repodata rebuilt | **2026-09-05** | **2026-09-05** |
 | packages | **14,436** | **14,154** |
-| kernel | 6.18 | 6.18, plus `rpi4-kernel` / `rpi5-kernel` 6.12 |
+| kernel | 6.18 | 6.18, plus `rpi4-kernel` / `rpi5-kernel` |
 | glibc / Mesa / Xorg | 2.41 / 26.1.8 / 21.1.24 | same |
 | Wine | **11.16** | — |
 
-Both ports were rebuilt *the same day this was written*, within twenty minutes
-of x86_64. That is a live port, not an archive. i686 carries current Mesa, a
-current Xorg, XFCE, LXQt, MATE, i3, IceWM, Firefox — and `wlroots`, so even
-Wayland is available on 32-bit if the hardware turns out to take it.
+Both ports were rebuilt the same day this was written, within twenty minutes of
+x86_64. That is a live port, not an archive. Void also brings **runit** rather
+than systemd, which on a 1 GB machine is not a philosophical preference.
 
-Void also brings **runit** instead of systemd, which on a 1 GB machine is not a
-philosophical preference.
+## The reference machine
 
-## The machines
+A **3.0 GHz hyper-threaded Pentium 4, 2 GB DDR400, GeForce 7600 GS AGP**.
 
-**The Pentium 4** — 3.0 GHz hyper-threaded, **2 GB DDR400**, with a **GeForce
-7600 GS AGP** (512 MB). Better than feared on both counts: the card gets a real
-hardware GL driver (nouveau's `nv30`, verified present in Mesa 26.1.8), and 2 GB
-puts it in the full XFCE tier rather than the cut-down one. The scarce resource
-here is the CPU. See [docs/target-p4.md](docs/target-p4.md) for the graphics
-analysis and the AGP caveats.
+The card gets a real hardware GL driver — nouveau's `nv30`, verified present in
+Mesa 26.1.8 by reading the symbols out of `libgallium`, not assumed. The
+proprietary route is closed: 304.xx was the last branch to support GeForce 6/7
+and does not build against a 6.x kernel.
 
-**A 1992 Compaq is out of scope.** It is not currently powering on, and 386/486
-era hardware has no SSE2 and therefore no path to any GL desktop; supporting it
-would be a different project with a framebuffer UI.
+⚠ The `nouveau.agpmode=` advice every forum gives **no longer exists**; AGP
+self-configures now. The real fallback is `nouveau.noaccel=1`. See
+[docs/target-p4.md](docs/target-p4.md).
 
-**Run `tools/hw-probe.sh` on the P4 before any more of this is built.**
-It is POSIX sh with no dependencies, so it runs from any live USB, and it
-reports the four things that decide the design: SSE2, RAM, whether there is a
-real KMS driver or only a framebuffer, and BIOS vs UEFI.
+Unsure what your machine can take? `tools/hw-probe.sh` is POSIX sh with no
+dependencies, so it runs from any live USB and reports the things that decide
+the design — SSE2, RAM, whether there is a real KMS driver or only a
+framebuffer, the GPU, and BIOS vs UEFI.
 
 ```sh
-sh tools/hw-probe.sh          # readable
-sh tools/hw-probe.sh --tsv    # to paste back
+sh tools/hw-probe.sh --tsv
 ```
 
 ## Building
 
-Needs docker (for xbps) and, to test, qemu.
+Needs docker (for xbps), and qemu to test.
 
 ```sh
-build/validate-profiles.sh          # every package name still exists, per arch
-build/mkrootfs.sh i686 desktop      # ~2.7 GB rootfs  (EMBER_WINE=0 → ~1.9 GB)
-build/mkimage.sh  i686 desktop      # bootable MBR/BIOS disk image
-build/boot-test.sh                  # does it boot?      (qemu, serial console)
-build/desktop-test.sh               # does a desktop draw? (qemu, framebuffer)
+build/validate-profiles.sh        # every package name still exists, per arch
+build/mkrootfs.sh i686 desktop    # ~3.9 GB rootfs   (EMBER_WINE=0 saves ~790 MB)
+build/mkimage.sh  i686 desktop    # ~6.4 GB bootable MBR/BIOS disk image
+sudo build/write-usb.sh           # write it to a stick, safely
 ```
 
-**Status: the i686 image boots to a working lightdm greeter**, verified in qemu
-with an IDE disk — 6/6 on the boot rig and 3/3 on the desktop rig. It has not
-yet run on the real machine, and the one thing qemu cannot tell us is whether
-nouveau is happy on that GeForce: qemu renders on a Bochs VGA in software, so a
-pass proves X, lightdm and the session are configured correctly and proves
-nothing about the actual card.
+`write-usb.sh` addresses the stick by its `/dev/disk/by-id` path and refuses
+anything that is not a real, removable, unmounted block device — because `dd` to
+a device letter that has moved does not fail, it creates a file in `/dev`, which
+is RAM.
 
-Write it to a disk or USB stick with the `dd` line `mkimage.sh` prints. Default
-login is `ember` / `ember`, root shares the password, and there is a serial
-console on ttyS0 with a getty on it — on a machine of this era that is the
-difference between debugging it and carrying it to a desk.
+### The test rigs
 
-The Pi image is not built yet: it is not a BIOS disk image but a FAT firmware
-partition plus `config.txt`, and it needs qemu-user-static for the ARM chroot.
+```sh
+build/boot-test.sh       # does it boot?              6 checks, qemu + serial
+build/desktop-test.sh    # does a desktop draw?       3 checks, framebuffer
+build/install-test.sh    # does it damage the other OS?  9 checks
+```
+
+`install-test.sh` is the one that matters. It builds a stand-in XP disk — MBR
+table, a partition starting at sector 63 as XP-era tools leave it, NTFS carrying
+the files os-prober keys on — then installs onto it twice and compares a
+**sha256 of the entire NTFS partition** before and after, plus every line of the
+partition table. All three rigs are green.
+
+## Installing
+
+Boot the USB and look before you leap:
+
+```sh
+sudo ember-install --plan          # prints the disk, the free space, the plan
+sudo ember-install /dev/sda        # asks you to type INSTALL
+sudo ember-install --reuse         # reinstall over an existing Ember partition
+```
+
+It creates **one** partition in unallocated space, never touching an existing
+one, and verifies every pre-existing partition entry is unchanged before it
+continues. The MBR and partition table are backed up **before any write**, to
+`/root/ember-install-backup/`, and the one line that undoes the bootloader
+change entirely is printed at the end and in every failure path:
+
+```sh
+dd if=/root/ember-install-backup/mbr.bin of=/dev/sda bs=512 count=1
+```
+
+`--reuse` accepts only a partition that is provably a previous install — ext4
+labelled `ember` — and refuses NTFS, unlabelled, or anything else.
+
+⚠ MBR allows only four primary partitions. The installer refuses if the disk
+already has four, rather than failing halfway through a table rewrite.
+
+## Reaching the Windows partition
+
+```sh
+sudo ember-mount-windows           # read-only, always safe
+sudo ember-mount-windows --rw      # read-write ONLY if the volume is clean
+sudo ember-mount-windows --fstab   # print a permanent fstab line
+```
+
+⛔ **This is the part that destroys data if you get it wrong.** A Windows volume
+that was hibernated or fast-shut-down is left dirty — mid-transaction, with
+Windows expecting to resume into it. Writing to that from Linux corrupts it, and
+the advice everywhere is to force the mount, which is exactly how the corruption
+happens. The helper asks `ntfs-3g.probe`, mounts read-only unless writing is
+provably safe, and names the reason when it refuses.
+
+## What is on it
+
+XFCE with Thunar, Firefox ESR, `gvfs`/`udisks2` so disks appear and mount,
+NetworkManager, PipeWire, **Wine 11.16**, fastfetch, SuperTuxKart and SuperTux.
+
+Wine hides itself from the application menu by design — upstream ships its
+`.desktop` as a file-type handler with `NoDisplay=true`, so double-clicking an
+`.exe` works but there is no "Wine" icon. Start with `winecfg`.
+
+⚠ SuperTuxKart needs OpenGL 3.3 for its normal renderer and a GeForce 7 gives
+2.1. It ships a 2.1 fallback, so it runs — without the effects.
+
+## Defaults
+
+Login `ember` / `ember`; root shares the password. There is a **serial console
+on ttyS0 with a getty on it** — on a machine of this era, being able to watch a
+boot and log in without a monitor attached is the difference between debugging
+it and carrying it to a desk.
 
 ## Layout
 
 ```
 tools/hw-probe.sh    what will this machine actually run
 profiles/            package sets, per architecture and per weight tier
-build/               rootfs and image builders, and the two qemu rigs
+build/               rootfs and image builders, the USB writer, three qemu rigs
+installer/           ember-install, ember-mount-windows
 docs/                design notes
 ```
+
+## Not done yet
+
+- **The Raspberry Pi image.** Not a BIOS disk image but a FAT firmware partition
+  plus `config.txt`, and it needs qemu-user-static for the ARM chroot. The
+  package sets are already validated for aarch64.
+- **Extreme Tux Racer** is not packaged by Void for any architecture; it would
+  need an xbps-src template.
 
 ## Licence
 
