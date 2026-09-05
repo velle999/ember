@@ -114,6 +114,14 @@ echo "   pkgs    $(echo "$PKGS" | wc -w)"
 # ⚠ The path is composed from EMBER_ID/version/arch/tier and nothing else, and
 # it is passed as a fixed mount rather than interpolated into the shell inside
 # the container — a `rm -rf` built by string-substitution is not a thing to have.
+# ⛔ THE STAMP IS REMOVED FIRST AND WRITTEN LAST. Without it mkimage.sh cannot
+# tell a finished rootfs from one that is still downloading — and it packaged a
+# half-built tree into a 2785 MiB image that looked entirely normal and had no
+# wine, no retroarch, no browser in it. Nothing failed; the build simply read a
+# directory that was still being written.
+STAMP="$ROOTFS/.ember-rootfs-complete"
+rm -f "$STAMP" 2>/dev/null || true
+
 if [ -d "$ROOTFS" ]; then
     echo "   clean   removing the previous $ROOTFS"
     docker run --rm -v "$PWD/$OUT:/out" "$VOID_IMAGE" \
@@ -206,6 +214,10 @@ if bad:
     sys.exit(1)
 print(f", all {names[want]}")
 ENDPY
+
+# Written only here: after xbps returned, after the architecture of every ELF in
+# the tree was verified. Anything earlier would stamp a tree that is not done.
+printf '%s\n' "$ARCH $TIER $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAMP"
 
 echo
 echo "rootfs built: $ROOTFS"

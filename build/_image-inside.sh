@@ -59,6 +59,26 @@ install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
+# ── libretro cores ──────────────────────────────────────────────────────────
+# ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the
+# config below says so explicitly rather than relying on that default: a
+# retroarch.cfg that names no core directory sends a first-time user to the
+# online updater, which is the one thing this machine cannot use.
+if [ -d /cores ] && [ -n "$(ls -A /cores 2>/dev/null)" ]; then
+    mkdir -p /mnt/usr/lib/libretro
+    cp -a /cores/. /mnt/usr/lib/libretro/
+    chmod 0644 /mnt/usr/lib/libretro/*.so 2>/dev/null || true
+    mkdir -p /mnt/etc
+    if [ -f /mnt/etc/retroarch.cfg ]; then
+        sed -i 's|^libretro_directory =.*|libretro_directory = "/usr/lib/libretro"|' /mnt/etc/retroarch.cfg
+        grep -q '^libretro_directory' /mnt/etc/retroarch.cfg || \
+            echo 'libretro_directory = "/usr/lib/libretro"' >> /mnt/etc/retroarch.cfg
+    else
+        echo 'libretro_directory = "/usr/lib/libretro"' > /mnt/etc/retroarch.cfg
+    fi
+    echo "inside: $(ls /mnt/usr/lib/libretro/*.so 2>/dev/null | wc -l) libretro cores installed"
+fi
+
 UUID=$(blkid -s UUID -o value "${LOOP}p1")
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > /mnt/etc/fstab
 printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname

@@ -53,6 +53,19 @@ case "$ARCH" in
     *) echo "mkimage: unknown architecture $ARCH" >&2; exit 2 ;;
 esac
 [ -d "$ROOTFS" ] || { echo "mkimage: no rootfs at $ROOTFS — run build/mkrootfs.sh first" >&2; exit 1; }
+
+# ⛔ A DIRECTORY IS NOT A FINISHED ROOTFS. mkrootfs.sh writes this stamp as its
+# very last act, after xbps has returned and after every ELF in the tree has been
+# checked for the right architecture. Building an image from a tree that is still
+# being written produces one that boots, looks correct, and is missing whatever
+# had not downloaded yet — which is exactly what happened: a 2785 MiB image with
+# no wine, no retroarch and no browser, and not one thing reported an error.
+if [ ! -f "$ROOTFS/.ember-rootfs-complete" ]; then
+    echo "mkimage: $ROOTFS has no completion stamp." >&2
+    echo "         Either mkrootfs.sh is still running, or it did not finish." >&2
+    echo "         Wait for it, or re-run: build/mkrootfs.sh $ARCH $TIER" >&2
+    exit 1
+fi
 docker info >/dev/null 2>&1 || { echo "mkimage: the docker daemon is not running" >&2; exit 1; }
 
 # Room for the tree plus somewhere to live. Measured rather than guessed, since
@@ -88,6 +101,7 @@ docker run --rm --privileged \
     -v "$PWD/$INSIDE:/image-inside.sh:ro" \
     -v "$PWD/build/_chroot-setup.sh:/chroot-setup.sh:ro" \
     -v "$PWD/installer:/installer:ro" \
+    -v "$PWD/cores/$ARCH:/cores:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
     -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" \

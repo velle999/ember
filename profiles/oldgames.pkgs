@@ -16,6 +16,21 @@
 dosbox-staging
 scummvm
 winetricks
+# ⚠ retroarch is 16 MB and ships with NOTHING TO RUN. Void's entire libretro
+# set is mupen64plus (N64) — one of the heaviest cores there is, and hopeless on
+# this hardware. RetroArch can download cores itself at runtime, which is
+# precisely what a machine with no network cannot do, so build/fetch-cores.sh
+# fetches them here and the image carries them. See docs/emulation.md.
+retroarch
+# Standalone and light, and better than RetroArch for several systems because
+# there is no core to manage: NES, SNES, GB/GBA, PC Engine, Genesis, Lynx.
+mednafen
+# ⛔ STANDALONE MAME IS DELIBERATELY ABSENT — 555 MB for something that would
+# not hold full speed here. MAME 0.282 chases accuracy on hardware two decades
+# newer than a Pentium 4. Arcade emulation is covered instead by the
+# mame2003_plus libretro core (MAME 0.78-era, from when MAME still targeted
+# machines like this one) and fbalpha2012 beside it, both fetched by
+# build/fetch-cores.sh. `xbps-install mame` puts it back if it is ever wanted.
 # Getting at the contents of old installers without running them — useful when
 # a setup.exe refuses, and often faster than fighting it.
 innoextract

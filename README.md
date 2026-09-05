@@ -76,8 +76,9 @@ Needs docker (for xbps), and qemu to test.
 
 ```sh
 build/validate-profiles.sh        # every package name still exists, per arch
-build/mkrootfs.sh i686 desktop    # ~3.9 GB rootfs   (EMBER_WINE=0 saves ~790 MB)
-build/mkimage.sh  i686 desktop    # ~6.4 GB bootable MBR/BIOS disk image
+build/fetch-cores.sh i686         # libretro cores (once; see below)
+build/mkrootfs.sh i686 desktop    # 4.7 GB rootfs    (EMBER_WINE=0 saves ~790 MB)
+build/mkimage.sh  i686 desktop    # 6.2 GB bootable MBR/BIOS disk image
 sudo build/write-usb.sh           # write it to a stick, safely
 ```
 
@@ -85,6 +86,62 @@ sudo build/write-usb.sh           # write it to a stick, safely
 anything that is not a real, removable, unmounted block device — because `dd` to
 a device letter that has moved does not fail, it creates a file in `/dev`, which
 is RAM.
+
+### Emulation and old games
+
+Void packages **essentially no libretro cores** — the whole i686 set is
+`mupen64plus`, one of the heaviest cores there is. RetroArch can download cores
+itself at runtime, which is exactly what a machine with no network cannot do, so
+they are fetched at build time and baked into the image:
+
+```sh
+build/fetch-cores.sh i686        # 31 cores from libretro's buildbot → cores/i686
+```
+
+They install to `/usr/lib/libretro` with `retroarch.cfg` pointed at it, so
+RetroArch works offline out of the box. `cores/` is gitignored — those are
+downloaded binaries, not source.
+
+⚠ **Standalone MAME is deliberately not installed.** It is 555 MB and MAME 0.282
+chases accuracy on hardware two decades newer than a Pentium 4. Arcade is
+covered by the **`mame2003_plus`** core instead — MAME 0.78-era, from when MAME
+still targeted machines like this — with `fbalpha2012` beside it.
+`xbps-install mame` puts the full thing back on a machine that can drive it.
+
+Beyond RetroArch: **`dosbox-staging`**, **`scummvm`**, **`mednafen`**, and
+**Wine** with `winetricks`. Reach for the right one — Wine cannot run a DOS
+binary at all, and ScummVM reads original LucasArts/Sierra data files without
+needing either.
+
+### Disc images, from the file manager
+
+Six Thunar right-click actions ship in `/etc/xdg/Thunar/uca.xml`: mount and
+eject ISOs, convert BIN/CUE with `bchunk`, load BIN/CUE into a virtual optical
+drive with `cdemu`, run an `.exe` under Wine, and extract an installer's
+contents with `innoextract` without running it.
+
+⛔ **BIN/CUE cannot be mounted**, and the menu says so by omission — "Mount disc
+image" does not appear for them. A `.bin` holds raw 2352-byte sectors including
+headers and error correction where a filesystem expects 2048-byte blocks, so
+`mount(8)` sees noise. Convert it, or hand it to `cdemu`, which presents a real
+`/dev/sr0` and is usually the better answer for a game that polls for a CD drive
+rather than reading a path.
+
+Mounting goes through `udisksctl`, not `sudo mount -o loop`: it runs as the
+user with polkit deciding, appears in Thunar's sidebar like any other volume,
+and ejects by clicking eject.
+
+### Getting software onto a machine with no network
+
+```sh
+build/mkrepo.sh i686 gimp vlc mc     # full dependency closure into out/ember-repo-i686
+```
+
+Copy that directory to a stick, then on the offline machine:
+
+```sh
+sudo xbps-install -R /path/to/ember-repo-i686 gimp vlc mc
+```
 
 ### The test rigs
 
@@ -165,10 +222,27 @@ it and carrying it to a desk.
 ```
 tools/hw-probe.sh    what will this machine actually run
 profiles/            package sets, per architecture and per weight tier
-build/               rootfs and image builders, the USB writer, three qemu rigs
-installer/           ember-install, ember-mount-windows
+build/               rootfs and image builders, the USB writer, three qemu rigs,
+                     the core fetcher and the offline-repo builder
+installer/           ember-install, ember-mount-windows, ember-disc, Thunar actions
+cores/               libretro cores, fetched not committed (gitignored)
 docs/                design notes
 ```
+
+## Two traps in the build system itself
+
+⛔ **`mkrootfs.sh` stamps the tree only when it is finished** — after xbps
+returns AND after every ELF in it has been checked for the right architecture —
+and `mkimage.sh` refuses a tree without that stamp. Without it, building an
+image from a rootfs that is still downloading produces one that boots, looks
+entirely normal, and is missing whatever had not arrived yet. Nothing reports an
+error, because nothing failed.
+
+⛔ **Never edit a shell script while an instance of it is running.** bash reads
+scripts by byte offset, so an insertion shifts everything after it and the
+running shell resumes mid-token — here it re-entered a cleanup branch and
+deleted a rootfs that 650 packages had just been installed into. The error names
+a command nobody wrote.
 
 ## Not done yet
 
