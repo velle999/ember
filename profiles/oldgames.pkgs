@@ -1,0 +1,33 @@
+# oldgames.pkgs — running games from the era of the hardware.
+#
+# ⚠ WINE IS NOT THE ANSWER TO EVERYTHING, and reaching for it first is the usual
+# mistake. Three different problems get three different tools:
+#
+#   · DOS games          → dosbox-staging. Wine cannot run a DOS binary at all;
+#                          it is a Windows compatibility layer, not a PC one.
+#   · LucasArts / Sierra → scummvm, which reads the original data files and
+#     point-and-click        needs neither Wine nor DOS.
+#   · Windows 9x/XP      → wine, with the caveats in docs/old-games.md.
+#
+# ⛔ SafeDisc and SecuROM WILL NOT WORK, by anything here. They shipped kernel
+# drivers, and no compatibility layer emulates a Windows ring-0 driver. A disc
+# with either needs a patched executable or a GOG re-release; this is a wall,
+# not a configuration problem.
+dosbox-staging
+scummvm
+winetricks
+# Getting at the contents of old installers without running them — useful when
+# a setup.exe refuses, and often faster than fighting it.
+innoextract
+cabextract
+p7zip
+# Some games poll for a real optical drive rather than reading a mounted path.
+cdemu-daemon
+cdemu-client
+# ⛔ .bin/.cue CANNOT BE MOUNTED. A .bin is raw 2352-byte sectors — headers and
+# error correction included — where a filesystem expects 2048-byte blocks, so
+# mount(8) sees noise. bchunk converts it; cdemu presents it as a real drive.
+bchunk
+# The Thunar actions report through zenity, because an action that fails
+# silently from a right-click menu cannot be told from one that did nothing.
+zenity

@@ -109,6 +109,8 @@ printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname
 
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
+install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
+install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
 mount --bind /dev  /mnt/dev
 mount --bind /proc /mnt/proc

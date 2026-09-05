@@ -58,7 +58,16 @@ docker info >/dev/null 2>&1 || { echo "mkimage: the docker daemon is not running
 # Room for the tree plus somewhere to live. Measured rather than guessed, since
 # the tier and EMBER_WINE move it by nearly a gigabyte.
 used_mb=$(docker run --rm -v "$PWD/$ROOTFS:/r:ro" "$VOID_IMAGE" du -sm /r | cut -f1)
-size_mb=$(( used_mb * 14 / 10 + 1024 ))
+# ⚠ 15% PLUS 768 MiB, NOT 40% PLUS A GIGABYTE. This headroom is for the LIVE
+# session only — the installer sizes the real root partition to whatever free
+# space it finds on the target disk, so slack carried in the image buys nothing
+# once installed and costs it on every write of the stick.
+#
+# ⛔ AND IT IS THE DIFFERENCE BETWEEN FITTING AND NOT. At 40% the image reached
+# 7604 MiB against a nominal 8 GB stick that offers about 7629 — a 25 MiB margin,
+# which is not a margin. Sticks vary in exact capacity and the next package
+# added would have made it unwritable.
+size_mb=$(( used_mb * 115 / 100 + 768 ))
 echo "== $EMBER_NAME $EMBER_VERSION — $ARCH / $TIER"
 echo "   rootfs  ${used_mb} MiB"
 echo "   image   ${size_mb} MiB  →  $IMG"

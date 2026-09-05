@@ -1,0 +1,126 @@
+#!/bin/bash
+#
+# ember-disc — mount a disc image, or turn a BIN/CUE into one.
+#
+# Driven from Thunar's right-click menu (see thunar-uca.xml) and usable from a
+# terminal. Reports through zenity when it has a display and stdout when it does
+# not, because a Thunar action that fails silently is indistinguishable from one
+# that did nothing.
+#
+# ⚠ udisksctl, NOT sudo mount. loop-setup runs as YOU: udisks does the
+# privileged part over D-Bus with polkit deciding, the image appears in Thunar's
+# sidebar like any other volume, and it unmounts by clicking eject. `sudo mount
+# -o loop` cannot be driven from a file manager, leaves a mount the desktop does
+# not know about, and needs a terminal to undo.
+#
+# ⛔ BIN/CUE IS NOT AN ISO AND CANNOT BE MOUNTED. A .bin is raw sectors —
+# 2352 bytes each including headers and error correction — while a filesystem
+# expects 2048-byte logical blocks. mount(8) sees noise. It has to be converted
+# (bchunk) or handed to something that emulates a real drive (cdemu).
+#
+# Usage:  ember-disc mount   <file.iso|file.img>
+#         ember-disc convert <file.cue>        # bchunk → .iso beside it
+#         ember-disc cdemu   <file.cue>        # emulated optical drive
+#         ember-disc unmount <file|/dev/loopN>
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -uo pipefail
+
+say() {   # say <title> <message>
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+        zenity --info --title="$1" --text="$2" --width=420 2>/dev/null
+    fi
+    printf '%s: %s\n' "$1" "$2"
+}
+die() {
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+        zenity --error --title="Disc image" --text="$1" --width=420 2>/dev/null
+    fi
+    printf 'ember-disc: %s\n' "$1" >&2
+    exit 1
+}
+
+ACTION=${1:-}; FILE=${2:-}
+[ -n "$ACTION" ] || die "no action given (mount, convert, cdemu, unmount)"
+
+case "$ACTION" in
+mount)
+    [ -f "$FILE" ] || die "no such file: $FILE"
+    case "${FILE,,}" in
+        *.cue|*.bin)
+            die "$(basename "$FILE") is a BIN/CUE image, which cannot be mounted directly.
+
+A .bin holds raw 2352-byte sectors; a filesystem needs 2048-byte blocks.
+
+Right-click it and choose 'Convert BIN/CUE to ISO' first, or
+'Mount BIN/CUE as a drive' if the game insists on a real CD." ;;
+    esac
+    command -v udisksctl >/dev/null || die "udisksctl is missing (install udisks2)"
+
+    out=$(udisksctl loop-setup -r -f "$FILE" 2>&1) || die "could not attach the image:
+$out"
+    dev=$(printf '%s' "$out" | grep -oE '/dev/loop[0-9]+' | head -1)
+    [ -n "$dev" ] || die "attached the image but could not tell which loop device:
+$out"
+    sleep 1
+    m=$(udisksctl mount -b "$dev" 2>&1)
+    case "$m" in
+        *"Mounted "*) point=$(printf '%s' "$m" | sed 's/.* at //; s/\.$//')
+                      say "Mounted" "$(basename "$FILE")\n\n$point"
+                      command -v thunar >/dev/null && thunar "$point" >/dev/null 2>&1 &
+                      ;;
+        *) udisksctl loop-delete -b "$dev" >/dev/null 2>&1
+           die "attached but could not mount it — is there a filesystem on it?
+$m" ;;
+    esac
+    ;;
+
+convert)
+    [ -f "$FILE" ] || die "no such file: $FILE"
+    command -v bchunk >/dev/null || die "bchunk is missing"
+    cue="$FILE"
+    case "${FILE,,}" in
+        *.bin) cue="${FILE%.*}.cue"; [ -f "$cue" ] || die "no .cue beside $(basename "$FILE") — bchunk needs both" ;;
+        *.cue) : ;;
+        *) die "give me the .cue (or the .bin with its .cue beside it)" ;;
+    esac
+    bin="${cue%.*}.bin"
+    [ -f "$bin" ] || die "no .bin beside $(basename "$cue")"
+
+    base="${cue%.*}"
+    # ⚠ bchunk names its output <base>01.iso, <base>02.cdr and so on — one file
+    # per TRACK. A mixed-mode disc (data track plus CD audio) therefore produces
+    # several files and only the first is mountable; -w writes the audio ones as
+    # .wav rather than raw .cdr, which is the more useful of the two.
+    out=$(bchunk -w "$bin" "$cue" "$base" 2>&1) || die "bchunk failed:
+$out"
+    made=$(ls "${base}"[0-9]*.iso "${base}"[0-9]*.wav 2>/dev/null | head -20)
+    say "Converted" "$(basename "$cue")\n\n$(printf '%s\n' "$made" | xargs -n1 basename 2>/dev/null)"
+    ;;
+
+cdemu)
+    [ -f "$FILE" ] || die "no such file: $FILE"
+    command -v cdemu >/dev/null || die "cdemu-client is missing"
+    # ⚠ THE POINT OF THIS over converting: cdemu presents a real optical device
+    # (/dev/sr0), so a game that polls for a CD drive rather than reading a path
+    # is satisfied. Conversion cannot do that.
+    o=$(cdemu load 0 "$FILE" 2>&1) || die "cdemu could not load it:
+$o
+Is the cdemu-daemon service running?"
+    say "Loaded" "$(basename "$FILE") is now in the virtual drive.\n\nIt should appear as a disc in the sidebar."
+    ;;
+
+unmount)
+    dev="$FILE"
+    case "$dev" in
+        /dev/loop*) : ;;
+        *) dev=$(losetup -j "$FILE" 2>/dev/null | cut -d: -f1 | head -1)
+           [ -n "$dev" ] || die "$(basename "$FILE") does not appear to be attached" ;;
+    esac
+    udisksctl unmount -b "$dev" >/dev/null 2>&1
+    udisksctl loop-delete -b "$dev" >/dev/null 2>&1 && say "Ejected" "$dev detached." \
+        || die "could not detach $dev"
+    ;;
+
+*) die "unknown action '$ACTION' (mount, convert, cdemu, unmount)" ;;
+esac

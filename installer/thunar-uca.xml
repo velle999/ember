@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Thunar custom actions, installed to /etc/xdg/Thunar/uca.xml so every user has
+  them without configuring anything.
+
+  ⚠ THE PATTERNS ARE WHY EACH ACTION APPEARS OR DOES NOT. Thunar shows an action
+  only when the selected filename matches, so "Mount disc image" is deliberately
+  NOT offered for .bin/.cue — those cannot be mounted, and an action that
+  appears and then explains itself is worse than one that is simply absent for
+  the wrong file type.
+
+  ⚠ A user who edits their own actions gets ~/.config/Thunar/uca.xml, which
+  SHADOWS this file entirely rather than merging. That is Thunar's behaviour,
+  not something configurable here.
+-->
+<actions>
+<action>
+	<icon>media-optical</icon>
+	<name>Mount disc image</name>
+	<submenu>Disc image</submenu>
+	<unique-id>ember-disc-mount</unique-id>
+	<command>ember-disc mount %f</command>
+	<description>Attach and mount this ISO as a drive</description>
+	<patterns>*.iso;*.ISO;*.img;*.IMG;*.udf;*.UDF</patterns>
+	<other-files/>
+</action>
+<action>
+	<icon>media-eject</icon>
+	<name>Eject disc image</name>
+	<submenu>Disc image</submenu>
+	<unique-id>ember-disc-unmount</unique-id>
+	<command>ember-disc unmount %f</command>
+	<description>Unmount and detach this image</description>
+	<patterns>*.iso;*.ISO;*.img;*.IMG</patterns>
+	<other-files/>
+</action>
+<action>
+	<icon>media-optical</icon>
+	<name>Convert BIN/CUE to ISO</name>
+	<submenu>Disc image</submenu>
+	<unique-id>ember-disc-convert</unique-id>
+	<command>ember-disc convert %f</command>
+	<description>bchunk this image into a mountable ISO (audio tracks become WAV)</description>
+	<patterns>*.cue;*.CUE;*.bin;*.BIN</patterns>
+	<other-files/>
+</action>
+<action>
+	<icon>drive-optical</icon>
+	<name>Mount BIN/CUE as a drive</name>
+	<submenu>Disc image</submenu>
+	<unique-id>ember-disc-cdemu</unique-id>
+	<command>ember-disc cdemu %f</command>
+	<description>Load into a virtual optical drive — for games that check for a real CD</description>
+	<patterns>*.cue;*.CUE;*.mds;*.MDS;*.ccd;*.CCD;*.nrg;*.NRG</patterns>
+	<other-files/>
+</action>
+<action>
+	<icon>wine</icon>
+	<name>Run with Wine</name>
+	<unique-id>ember-wine-run</unique-id>
+	<command>wine %f</command>
+	<description>Run this Windows program under Wine</description>
+	<patterns>*.exe;*.EXE;*.msi;*.MSI;*.bat;*.BAT</patterns>
+	<other-files/>
+</action>
+<action>
+	<icon>package-x-generic</icon>
+	<name>Extract installer contents</name>
+	<unique-id>ember-innoextract</unique-id>
+	<command>xfce4-terminal --hold -e "innoextract -d %n.extracted %f"</command>
+	<description>Pull the files out of an installer without running it</description>
+	<patterns>*.exe;*.EXE</patterns>
+	<other-files/>
+</action>
+</actions>

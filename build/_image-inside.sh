@@ -56,6 +56,8 @@ cp -a /out/rootfs/. /mnt/
 # boot it from a USB stick and it puts itself on a disk.
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
+install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
+install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 
 UUID=$(blkid -s UUID -o value "${LOOP}p1")
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > /mnt/etc/fstab
