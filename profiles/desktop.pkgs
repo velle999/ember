@@ -17,6 +17,10 @@ wireplumber
 alsa-pipewire
 NetworkManager
 network-manager-applet
-firefox
+# ⚠ ESR, NOT MAINLINE. On a Pentium 4 the browser is the heaviest thing the
+# machine will ever run and the bottleneck is the CPU, not the RAM — so the
+# release train that changes least often is worth more here than the newest
+# engine. Mainline `firefox` is in the repository if it is ever wanted.
+firefox-esr
 mousepad
 ristretto

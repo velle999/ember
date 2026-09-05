@@ -7,14 +7,29 @@ packages Ember would actually install, not from memory.
 
 | | |
 |---|---|
-| CPU | Pentium 4, hyper-threaded (2 logical cores) |
+| CPU | **Pentium 4 3.0 GHz**, hyper-threaded (2 logical cores) |
+| RAM | **2 GB DDR400** |
 | GPU | **GeForce 7600 GS, AGP** — G73, the GeForce 7 family |
 | VRAM | 512 MB |
-| System RAM | **unknown — this is the open question** |
 
-⚠ **512 MB is the card, not the machine.** System RAM is still unmeasured and it
-decides the desktop tier: under a gigabyte means `desktop-min` and no Firefox;
-two gigabytes means `desktop` is comfortable. `tools/hw-probe.sh` answers it.
+**Tier: `desktop`** — XFCE, not the cut-down IceWM tier. 2 GB is comfortably
+above where that choice gets difficult; on this machine the scarce resource is
+the CPU, not memory, and no window manager fixes that.
+
+### The CPU baseline is not a concern
+
+Void's i686 port is built `-mtune=i686` — **tune, not march**, so the
+instruction selection is a true Pentium Pro baseline with no SSE assumed at all.
+A 3 GHz P4 is far above the floor; there is no compatibility question here.
+
+The flip side is that nothing is *optimised* for this chip either: every package
+is scheduled for generic i686. Void ships `xbps-src`, so rebuilding a few hot
+packages with `-march=prescott` is available later if it ever seems worth the
+build time. It is not a prerequisite for anything.
+
+⚠ **Whether this is a Northwood or a Prescott is still unknown**, and the probe
+answers it in passing: Prescott has SSE3, Northwood does not. It changes nothing
+about the target, but it is the difference between two quite different chips.
 
 ## The graphics stack, which was the real worry
 
@@ -72,7 +87,8 @@ should stake itself on.
 
 ## Still open
 
-- **System RAM.** Decides the tier. Run the probe.
-- Whether `nv30` on this board is *stable*, which no amount of reading settles.
-- Whether the P4 is a Northwood or a Prescott — the probe's `lm` flag says. It
-  changes nothing here (the target is i686 either way) but it is worth knowing.
+- Whether `nv30` on this board is **stable**, which no amount of reading
+  settles. This is now the only real unknown, and only the machine can answer it.
+- Northwood or Prescott (the probe's `sse3` line says).
+- Whether XFCE's compositor is worth having on `nv30`, or whether it should be
+  off by default here.

@@ -56,14 +56,12 @@ philosophical preference.
 
 ## The machines
 
-**The Pentium 4** — hyper-threaded, with a **GeForce 7600 GS AGP** and 512 MB of
-video memory. Better than feared: the card gets a real hardware GL driver
-(nouveau's `nv30`, verified present in Mesa 26.1.8), so this is not a
-software-rendering machine. See [docs/target-p4.md](docs/target-p4.md) for the
-graphics analysis and the AGP caveats.
-
-⚠ Its **system RAM is still unmeasured** — the 512 MB is the card — and that is
-what picks the desktop tier.
+**The Pentium 4** — 3.0 GHz hyper-threaded, **2 GB DDR400**, with a **GeForce
+7600 GS AGP** (512 MB). Better than feared on both counts: the card gets a real
+hardware GL driver (nouveau's `nv30`, verified present in Mesa 26.1.8), and 2 GB
+puts it in the full XFCE tier rather than the cut-down one. The scarce resource
+here is the CPU. See [docs/target-p4.md](docs/target-p4.md) for the graphics
+analysis and the AGP caveats.
 
 **A 1992 Compaq is out of scope.** It is not currently powering on, and 386/486
 era hardware has no SSE2 and therefore no path to any GL desktop; supporting it
