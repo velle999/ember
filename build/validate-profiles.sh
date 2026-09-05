@@ -35,6 +35,7 @@ fetch() {  # fetch <arch> <repo-url>
 fetch i686    "$VOID_REPO_I686"
 fetch aarch64 "$VOID_REPO_AARCH64"
 
+export KERNEL_I686
 python3 - "$cache" <<'PY'
 import plistlib, sys, os
 cache = sys.argv[1]
@@ -49,7 +50,7 @@ def names(f):
 # listed against both architectures on purpose: the tier is chosen per MACHINE
 # (a 1 GB Pi 4 wants the small one too), so both have to resolve on both.
 sets = {
-    "i686":    ["base", "desktop-min", "desktop", "arch-i686"],
+    "i686":    ["base", "desktop-min", "desktop", "arch-i686", "legacy-wine"],
     "aarch64": ["base", "desktop-min", "desktop", "arch-aarch64"],
 }
 bad = 0
@@ -63,12 +64,20 @@ for arch, profs in sets.items():
                 bad += 1
     print(f"  ok       {arch:8} {n} package name(s) across {len(profs)} profile(s)")
 
-# The per-model Pi packages are named in config.sh rather than a profile, so
-# they are checked here too or they are checked nowhere.
+# ⛔ THE THINGS NAMED IN config.sh ARE CHECKED HERE OR NOWHERE, and the kernel
+# pin is the one that will actually rot: Void is rolling, so `linux6.18` stops
+# existing the day it becomes linux6.19. That has to fail here, with the name to
+# bump, rather than three minutes into a build.
 for pkg in ("rpi4-base", "rpi4-kernel", "rpi-base", "rpi5-kernel"):
     if pkg not in idx["aarch64"]:
         print(f"  MISSING  aarch64  {pkg:28} build/config.sh")
         bad += 1
+kern = os.environ.get("KERNEL_I686", "")
+if kern and kern not in idx["i686"]:
+    print(f"  MISSING  i686     {kern:28} build/config.sh — bump KERNEL_I686")
+    bad += 1
+elif kern:
+    print(f"  ok       i686     kernel pin {kern} still exists")
 
 print(f"\n{bad} missing name(s)")
 sys.exit(1 if bad else 0)

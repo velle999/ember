@@ -1,19 +1,26 @@
 # arch-i686.pkgs — the 32-bit x86 half.
 #
-# ⚠ THE VIDEO DRIVERS ARE NAMED, NOT METAPACKAGED. A Pentium 4 has whatever GPU
-# it shipped with — i915, a Radeon of the era, an early GeForce, or nothing — and
-# which one decides whether there is any acceleration at all. vesa is the floor
-# and is always installed: it is what runs when none of the others bind.
-linux
-linux-firmware-network
+# ⛔ NO `linux` AND NO FIRMWARE PACKAGE. See build/config.sh: the `linux`
+# metapackage pulls `linux-base`, which pulls 668 MB of firmware blobs for
+# hardware that cannot exist in this machine. The kernel is named in config.sh
+# ($KERNEL_I686) and dracut is asked for here.
+#
+# ⚠ THE NICS OF THIS ERA NEED NO FIRMWARE. 3c59x, Realtek 8139/8169, e1000 and
+# nForce forcedeth all carry their microcode in the driver. The exception is
+# Intel PRO/100 (e100), whose blob lives only inside the 500 MB
+# linux-firmware-network package — if that specific card turns up, install that
+# package by hand rather than putting it back here for everyone.
+dracut
 grub
+#
+# ⚠ THE VIDEO DRIVERS ARE NAMED, NOT METAPACKAGED. A Pentium 4 has whatever GPU
+# it shipped with, and which one decides whether there is any acceleration at
+# all. vesa is the floor and is always installed: it is what runs when none of
+# the others bind. nouveau is the one that matters on the target machine — see
+# docs/target-p4.md.
 xf86-video-vesa
 xf86-video-fbdev
 xf86-video-intel
 xf86-video-ati
 xf86-video-nouveau
 mesa-dri
-# Legacy software is a stated requirement of this project, and on 32-bit x86 it
-# largely means Wine. Void carries it for i686, which almost nothing else does.
-wine
-wine-mono

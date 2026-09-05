@@ -24,6 +24,25 @@ case "$RPI_MODEL" in
     *) echo "config.sh: RPI_MODEL must be 4 or 5 (got '$RPI_MODEL')" >&2; return 1 2>/dev/null || exit 1 ;;
 esac
 
+# ⛔ THE i686 KERNEL IS PINNED BY NAME, AND THAT IS DELIBERATE. The obvious
+# choice is Void's `linux` metapackage — but it depends on `linux-base`, and
+# `linux-base` is `dracut` plus EVERY firmware set plus one 1-line script.
+# On this target that is 668 MB of blobs for hardware that cannot exist in an
+# AGP Pentium 4: 174 MB of modern Intel, 102 MB of Mellanox datacentre NICs,
+# and 108 MB of NVIDIA GSP firmware which is for Turing and later — the exact
+# opposite end of history from a GeForce 7600.
+#
+# So the kernel is named directly and dracut is asked for separately. The cost
+# is that this pin goes stale when Void moves on, which is why
+# build/validate-profiles.sh checks it: it fails loudly with the name to bump
+# rather than silently at build time.
+KERNEL_I686="linux6.18"
+
+# Wine is 791 MB and it is the single biggest thing in an i686 image — but
+# running legacy software is a stated requirement of this project, so it is on
+# by default and switched off with EMBER_WINE=0 rather than being opt-in.
+EMBER_WINE="${EMBER_WINE:-1}"
+
 # The container that supplies xbps. Building a Void rootfs needs Void's own
 # package manager, which is not packaged for the host distributions this is
 # developed on.

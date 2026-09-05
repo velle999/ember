@@ -1,0 +1,7 @@
+# legacy-wine.pkgs — running legacy software, which on 32-bit x86 means Wine.
+#
+# ⚠ 791 MB, the largest single thing in the image. It is here rather than in
+# arch-i686.pkgs so that dropping it is EMBER_WINE=0 and not an edit. Void
+# carries Wine for i686, which almost nothing else still does.
+wine
+wine-mono
