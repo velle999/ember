@@ -32,6 +32,12 @@ wireplumber
 alsa-pipewire
 NetworkManager
 network-manager-applet
+# ⚠ Without this a headless machine announces nothing and cannot be reached by
+# name — `ember.local` does not resolve, and finding it means reading an IP off
+# a TTY. nss-mdns is the half people forget: avahi alone advertises, but does
+# not let this machine RESOLVE other .local names.
+avahi
+nss-mdns
 # ⚠ ESR, NOT MAINLINE. On a Pentium 4 the browser is the heaviest thing the
 # machine will ever run and the bottleneck is the CPU, not the RAM — so the
 # release train that changes least often is worth more here than the newest

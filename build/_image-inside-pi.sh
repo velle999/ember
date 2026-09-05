@@ -100,12 +100,32 @@ printf 'root=PARTUUID=%s-02 rw rootwait fsck.repair=yes console=ttyAMA0,115200 c
     echo 'arm_64bit=1'
     echo 'enable_uart=1'
     echo 'disable_overscan=1'
+    # ⚠ Model-specific KMS overlay. Void ships vc4-kms-v3d-pi4.dtbo and
+    # vc4-kms-v3d-pi5.dtbo alongside the generic one; the generic overlay is
+    # written by the rpi packages and the specific one is appended after it, so
+    # the later line wins. On a Pi 4 the -pi4 variant is what drives both HDMI
+    # outputs at full clock.
+    if [ -f "/mnt/boot/overlays/vc4-kms-v3d-pi${RPI_MODEL_N}.dtbo" ]; then
+        echo "dtoverlay=vc4-kms-v3d-pi${RPI_MODEL_N}"
+    fi
 } >> /mnt/boot/config.txt
 
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n'          "$ROOTUUID" >  /mnt/etc/fstab
 printf 'UUID=%s\t/boot\tvfat\tdefaults,nofail\t0 2\n'       "$BOOTUUID" >> /mnt/etc/fstab
 printf 'tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0\n'               >> /mnt/etc/fstab
 printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname
+
+# ⛔ FORCE vc4 AND v3d TO LOAD. Without a DRM device X has nothing to drive:
+# the firmware hands the kernel a simple-framebuffer, the console renders on it
+# perfectly, and Xorg then finds no /dev/dri/card* and dies — which looks like a
+# broken desktop rather than a missing driver. `cat /sys/class/graphics/fb0/name`
+# saying "simple" instead of "vc4" is the tell.
+#
+# ⚠ There is NO INITRAMFS on this target, so nothing loads a module before the
+# root is mounted, and the DT modalias autoload has to happen through udev after
+# it. Naming them here does not depend on that working.
+mkdir -p /mnt/etc/modules-load.d
+printf 'vc4\nv3d\n' > /mnt/etc/modules-load.d/10-ember-vc4.conf
 
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows

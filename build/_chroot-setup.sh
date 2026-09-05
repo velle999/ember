@@ -94,6 +94,10 @@ if [ "$TIER" = desktop ]; then
     ln -sf /etc/sv/polkitd        .
     ln -sf /etc/sv/NetworkManager .
     ln -sf /etc/sv/lightdm        .
+    # ⛔ INSTALLING avahi IS NOT ENABLING IT. The package was added and the
+    # service left off, so the machine still announced nothing and ember.local
+    # still did not resolve — the same shape as the udisks2 gap above.
+    [ -d /etc/sv/avahi-daemon ] && ln -sf /etc/sv/avahi-daemon . || true
     # ⚠ NO udisks2 SERVICE, and that is correct: Void D-Bus activates it, so
     # there is nothing to enable. The line that used to be here was
     # `[ -d ... ] && ln -sf ...` as the LAST command, and a false test as the
@@ -102,5 +106,15 @@ if [ "$TIER" = desktop ]; then
 else
     ln -sf /etc/sv/dhcpcd .
 fi
+# ⚠ nss-mdns DOES NOTHING UNTIL nsswitch.conf ASKS FOR IT. The library being
+# installed is not the same as glibc consulting it, so .local lookups keep going
+# to DNS and failing. mdns_minimal goes BEFORE dns and carries
+# [NOTFOUND=return], or every miss on a .local name waits for a DNS timeout
+# first — which is the difference between "not found" and "hangs for ten
+# seconds".
+if [ -f /etc/nsswitch.conf ] && ! grep -q mdns /etc/nsswitch.conf; then
+    sed -i 's/^\(hosts:.*\)files\(.*\)$/\1files mdns_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf
+fi
+
 # ⛔ An explicit success. Nothing below may be a bare `test && command`.
 exit 0

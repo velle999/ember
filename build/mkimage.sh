@@ -104,7 +104,7 @@ docker run --rm --privileged \
     -v "$PWD/cores/$ARCH:/cores:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
-    -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" \
+    -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" -e RPI_MODEL_N="$RPI_MODEL" \
     "$VOID_IMAGE" /bin/sh /image-inside.sh
 
 echo
