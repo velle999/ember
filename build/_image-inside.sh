@@ -65,9 +65,35 @@ cat > /mnt/tmp/setup.sh <<'INNER'
 #!/bin/bash
 set -euo pipefail
 
-useradd -m -G wheel,audio,video,input -s /bin/bash "$USERNAME" 2>/dev/null || true
-printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd
-printf 'root:%s\n' "$PASSWORD" | chpasswd
+# ⛔ NOT `2>/dev/null || true`. If the account cannot be created there is no
+# point continuing to build an image nobody can log into.
+useradd -m -G wheel,audio,video,input -s /bin/bash "$USERNAME"
+
+# ⛔ -c SHA512, AND IT IS THE WHOLE BUG. This rootfs has no ENCRYPT_METHOD line
+# in /etc/login.defs, so shadow 4.8.1 falls back to a crypt method modern
+# libxcrypt will not produce — and `chpasswd` then EXITS 0 HAVING WRITTEN
+# NOTHING. The first image built and booted perfectly and no password on earth
+# would open it: /etc/shadow held "x" for root and "!" for the user, which is a
+# locked account. Nothing anywhere said so.
+#
+# The method is also written into login.defs, because otherwise the same trap
+# springs on the machine itself the first time somebody runs `passwd` — they
+# would lock themselves out of their own box changing their own password.
+printf 'ENCRYPT_METHOD SHA512\n' >> /etc/login.defs
+printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd -c SHA512
+printf 'root:%s\n' "$PASSWORD" | chpasswd -c SHA512
+
+# ⚠ VERIFIED, BECAUSE THE FAILURE MODE IS SILENCE. A shadow field that is not a
+# real hash means an account nobody can enter, and the only symptom is a login
+# prompt that says the password is wrong — on a machine in another room.
+for acct in root "$USERNAME"; do
+    h=$(awk -F: -v a="$acct" '$1 == a {print $2}' /etc/shadow)
+    case "$h" in
+        \$6\$*) : ;;
+        *) echo "mkimage: $acct has no usable password hash in /etc/shadow (got '$h')" >&2
+           exit 1 ;;
+    esac
+done
 mkdir -p /etc/sudoers.d
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
