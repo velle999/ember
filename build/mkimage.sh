@@ -39,12 +39,19 @@ IMG="$OUT/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER.img"
 USERNAME=${EMBER_USER:-ember}
 PASSWORD=${EMBER_PASS:-ember}
 
-if [ "$ARCH" != i686 ]; then
-    echo "mkimage: only i686 is wired up. A Pi image is not a disk image with a" >&2
-    echo "         BIOS bootloader — it is a FAT firmware partition plus config.txt," >&2
-    echo "         and building it needs qemu-user-static for the ARM chroot." >&2
-    exit 2
-fi
+case "$ARCH" in
+    i686)    INSIDE=build/_image-inside.sh ;;
+    aarch64) INSIDE=build/_image-inside-pi.sh
+             # ⛔ The ARM chroot cannot run without qemu-user-static registered
+             # in binfmt_misc — see mkrootfs.sh for the same refusal and why it
+             # is a refusal rather than a warning.
+             ls /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -qi 'aarch64\|arm64' || {
+                 echo "mkimage: aarch64 needs qemu-user-static in binfmt_misc." >&2
+                 echo "         docker run --privileged --rm tonistiigi/binfmt --install arm64" >&2
+                 exit 1; }
+             ;;
+    *) echo "mkimage: unknown architecture $ARCH" >&2; exit 2 ;;
+esac
 [ -d "$ROOTFS" ] || { echo "mkimage: no rootfs at $ROOTFS — run build/mkrootfs.sh first" >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "mkimage: the docker daemon is not running" >&2; exit 1; }
 
@@ -69,7 +76,8 @@ truncate -s "${size_mb}M" "$IMG"
 docker run --rm --privileged \
     -v /dev:/dev \
     -v "$PWD/$OUT:/out" \
-    -v "$PWD/build/_image-inside.sh:/image-inside.sh:ro" \
+    -v "$PWD/$INSIDE:/image-inside.sh:ro" \
+    -v "$PWD/build/_chroot-setup.sh:/chroot-setup.sh:ro" \
     -v "$PWD/installer:/installer:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
@@ -80,5 +88,5 @@ echo
 echo "image: $IMG"
 ls -lh "$IMG"
 echo
-echo "Write it to a disk or USB stick with:"
+echo "Write it to a disk, USB stick or SD card with:"
 echo "    sudo dd if=$IMG of=/dev/sdX bs=4M status=progress conv=fsync"

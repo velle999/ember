@@ -65,97 +65,13 @@ mount --bind /dev  /mnt/dev
 mount --bind /proc /mnt/proc
 mount --bind /sys  /mnt/sys
 
-# The chroot's own script, written out for the same reason this file exists.
-cat > /mnt/tmp/setup.sh <<'INNER'
-#!/bin/bash
-set -euo pipefail
-
-# ⛔ NOT `2>/dev/null || true`. If the account cannot be created there is no
-# point continuing to build an image nobody can log into.
-useradd -m -G wheel,audio,video,input -s /bin/bash "$USERNAME"
-
-# ⛔ -c SHA512, AND IT IS THE WHOLE BUG. This rootfs has no ENCRYPT_METHOD line
-# in /etc/login.defs, so shadow 4.8.1 falls back to a crypt method modern
-# libxcrypt will not produce — and `chpasswd` then EXITS 0 HAVING WRITTEN
-# NOTHING. The first image built and booted perfectly and no password on earth
-# would open it: /etc/shadow held "x" for root and "!" for the user, which is a
-# locked account. Nothing anywhere said so.
-#
-# The method is also written into login.defs, because otherwise the same trap
-# springs on the machine itself the first time somebody runs `passwd` — they
-# would lock themselves out of their own box changing their own password.
-printf 'ENCRYPT_METHOD SHA512\n' >> /etc/login.defs
-printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd -c SHA512
-printf 'root:%s\n' "$PASSWORD" | chpasswd -c SHA512
-
-# ⚠ VERIFIED, BECAUSE THE FAILURE MODE IS SILENCE. A shadow field that is not a
-# real hash means an account nobody can enter, and the only symptom is a login
-# prompt that says the password is wrong — on a machine in another room.
-for acct in root "$USERNAME"; do
-    h=$(awk -F: -v a="$acct" '$1 == a {print $2}' /etc/shadow)
-    case "$h" in
-        \$6\$*) : ;;
-        *) echo "mkimage: $acct has no usable password hash in /etc/shadow (got '$h')" >&2
-           exit 1 ;;
-    esac
-done
-mkdir -p /etc/sudoers.d
-echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
-chmod 440 /etc/sudoers.d/wheel
-
-# ⛔ REGENERATED --no-hostonly. The initramfs already in the rootfs was built
-# inside a container against the CONTAINER's hardware; a hostonly image made
-# there carries that machine's storage drivers and not the Pentium 4's IDE/SATA
-# controller. The failure mode is a kernel panic on a box with no serial console.
-dracut --force --no-hostonly
-
-# ⚠ A SERIAL CONSOLE, ON PURPOSE AND SHIPPED. tty0 stays first so a monitor
-# still shows everything; ttyS0 mirrors it. On a machine of this era that is a
-# debugging lifeline — a kernel panic before X starts is otherwise a photograph
-# of a screen — and it is what makes the image testable in qemu without a
-# display at all. See build/boot-test.sh.
-sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200"/' /etc/default/grub
-grep -q '^GRUB_TERMINAL' /etc/default/grub || echo 'GRUB_TERMINAL_OUTPUT="console serial"' >> /etc/default/grub
-echo 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0"' >> /etc/default/grub
-
-grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
-grub-mkconfig -o /boot/grub/grub.cfg
-
-# ⛔ NEVER BOTH NetworkManager AND dhcpcd. They each want the interface and
-# fight over it; enabling the pair is the classic way to get a machine that has
-# an address for ten seconds at a time.
-cd /etc/runit/runsvdir/default
-ln -sf /etc/sv/dbus  .
-ln -sf /etc/sv/udevd .
-# ⚠ A GETTY ON THE SERIAL LINE, or the console added above is write-only. The
-# kernel and runit both log to ttyS0, but the six agettys Void enables by
-# default are all on VGA tty1-6 — so without this you can watch a boot over
-# serial and then have nowhere to type. On a machine of this era, being able to
-# log in without a monitor attached is the difference between debugging it and
-# carrying it to a desk.
-ln -sf /etc/sv/agetty-ttyS0 .
-if [ "$TIER" = desktop ]; then
-    ln -sf /etc/sv/elogind        .
-    ln -sf /etc/sv/polkitd        .
-    ln -sf /etc/sv/NetworkManager .
-    ln -sf /etc/sv/lightdm        .
-    # ⚠ NO udisks2 SERVICE, and that is correct: Void ships udisks2 as a
-    # D-Bus activated daemon with no /etc/sv entry, so it starts on demand when
-    # gvfs asks it to. There is nothing to enable.
-    #
-    # ⛔ The line that used to be here was `[ -d /etc/sv/udisks2 ] && ln -sf ...`
-    # and it was the LAST command in this script. When the test failed — which
-    # it always did, the directory never existing — the && yielded 1, `set -e`
-    # made that the script exit status, and the whole image build reported
-    # FAILURE after having completed successfully. Never end a script on a bare
-    # `test && command`.
-else
-    ln -sf /etc/sv/dhcpcd .
-fi
-INNER
-chmod +x /mnt/tmp/setup.sh
+# ⛔ THE CHROOT SCRIPT IS SHARED WITH THE PI PATH — see build/_chroot-setup.sh.
+# It used to be a heredoc here, which meant the Pi builder would have needed its
+# own copy of the accounts, the chpasswd trap and the service set. One of those
+# copies would eventually have been fixed and the other not.
+install -Dm755 /chroot-setup.sh /mnt/tmp/setup.sh
 chroot /mnt env USERNAME="$USERNAME" PASSWORD="$PASSWORD" \
-                TIER="$TIER" LOOP="$LOOP" /tmp/setup.sh
+                TIER="$TIER" LOOP="$LOOP" BOOTLOADER=grub /tmp/setup.sh
 rm -f /mnt/tmp/setup.sh
 
 # ── verify by content, not by exit status ───────────────────────────────────
