@@ -44,6 +44,10 @@ xfce4-terminal
 xfce4-pulseaudio-plugin
 lightdm
 lightdm-gtk3-greeter
+# ⚠ alsa-utils is NOT optional alongside pipewire: without it there is no
+# amixer to unmute a card that boots silent, and no alsactl to persist the
+# level across reboots. desktop-min already had it; desktop did not.
+alsa-utils
 pipewire
 wireplumber
 alsa-pipewire

@@ -157,6 +157,33 @@ if [ "$TIER" = desktop ]; then
     rm -f /etc/runit/runsvdir/default/dhcpcd \
           /etc/runit/runsvdir/default/dhcpcd-eth0
     enable_sv elogind polkitd NetworkManager lightdm
+
+    # ── audio ───────────────────────────────────────────────────────────────
+    # ⛔ INSTALLING pipewire WIRES UP NOTHING ON VOID. The package ships the
+    # daemons, the autostart .desktop files and the config fragments, and then
+    # leaves every one of them unlinked — so a desktop with pipewire installed
+    # comes up with NO audio at all and no error anywhere. The symptom is a
+    # lone "Dummy Output" sink in `wpctl status` with an empty device list,
+    # which reads like broken hardware rather than a missing symlink. All three
+    # autostart entries are needed: pipewire alone gives a server with no
+    # session manager, and still no devices.
+    mkdir -p /etc/pipewire/pipewire.conf.d /etc/xdg/autostart
+    for f in /usr/share/examples/pipewire/20-pipewire-pulse.conf \
+             /usr/share/examples/wireplumber/10-wireplumber.conf; do
+        [ -f "$f" ] && ln -sf "$f" /etc/pipewire/pipewire.conf.d/
+    done
+    for d in pipewire pipewire-pulse wireplumber; do
+        [ -f "/usr/share/applications/$d.desktop" ] &&
+            ln -sf "/usr/share/applications/$d.desktop" "/etc/xdg/autostart/$d.desktop"
+    done
+    # Prove it rather than trusting the loops above.
+    n=$(ls /etc/xdg/autostart/ 2>/dev/null | grep -cE 'pipewire|wireplumber')
+    [ "$n" = 3 ] || { echo "chroot: $n/3 pipewire autostart entries linked" >&2; exit 1; }
+
+    # ⚠ pipewire must run in the user's SEATED session. Started from an ssh
+    # session (no seat) wireplumber claims no devices and produces the same
+    # Dummy Output — the daemons are fine, the session is wrong. `loginctl
+    # list-sessions` showing an empty SEAT column is the tell.
     # ⛔ INSTALLING avahi IS NOT ENABLING IT. The package was added and the
     # service left off, so the machine still announced nothing and ember.local
     # still did not resolve — the same shape as the udisks2 gap above.
