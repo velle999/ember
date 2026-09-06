@@ -6,13 +6,16 @@
  * it downloads, extracts, loads the 32-bit steamui.so and reports
  * "Running Steam on void  32-bit".
  *
- * This overrides only utsname.machine, and only for processes it is preloaded
- * into. It is a compatibility shim for running the client on the hardware it
- * is installed on — it changes no Steam file on disk.
+ * ⛔ THIS DOES NOT WORK, AND IS KEPT ONLY AS A DOCUMENTED FAILURE.
  *
- * ⚠ This does NOT make the machine 64-bit. Anything that actually needs to
- * execute a 64-bit binary (Steam's ubuntu12_64 helpers, and any 64-bit game)
- * still cannot. It only gets past the check.
+ * It does get past the assert. Steam then tries to start what the check was
+ * gating — steamwebhelper under the 64-bit pressure-vessel runtime — and those
+ * are 64-bit ELFs a 32-bit kernel cannot execute, so the shell parses them as
+ * text ("ELF: not found", "Syntax error: ')' unexpected"). Since the 2023 UI
+ * rewrite steamwebhelper IS the interface, so it never renders, the main loop
+ * stalls, and the machine appears to freeze.
+ *
+ * The check is load-bearing. Do not reach for this again.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */

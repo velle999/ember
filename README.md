@@ -218,38 +218,45 @@ never matches, because Linux truncates a process name to 15 characters
 (`UnrealTournamen`). A "killed" instance survives and later tests read its stale
 windows.
 
-### Steam on a 32-bit host
+### Steam on a 32-bit host — it does not work
 
-Steam's client binaries are still 32-bit i386 — `ubuntu12_32/steam` and
-`steamui.so` both are. What stops it on a 32-bit-only machine is narrower than
-that: `Is64BitOS()` in `steamui.so` reads `uname(2)` and asserts when
-`utsname.machine` is not `x86_64`.
+**Steam cannot run on the i686 target.** This was tested to exhaustion rather
+than assumed, so the dead ends are recorded here to stop anyone repeating them.
 
-Everything else works. On the reference P4 the client downloads, extracts,
-loads the 32-bit `steamui.so` and reports `Running Steam on void  32-bit`,
-given two packages that are easy to miss:
+The client binaries genuinely are still 32-bit — `ubuntu12_32/steam` and
+`steamui.so` both are — and it gets impressively far. Given `gtk+` (GTK2, for
+`steamui.so`) and `xz` (for the runtime unpack), both now in the package
+profiles, the client downloads, extracts, loads the 32-bit `steamui.so` and
+reports `Running Steam on void  32-bit`.
 
-- **`gtk+`** (GTK2) — without it `steamui.so` fails with
-  `libgtk-x11-2.0.so.0: cannot open shared object file`
-- **`xz`** — without it the runtime never unpacks and the failure surfaces much
-  later as missing files inside the runtime
+Then `Is64BitOS()` in `steamui.so` reads `uname(2)` and asserts, because
+`utsname.machine` is `i686`.
 
-`tools/steam64shim.c` answers just that one check:
+⛔ **Answering that check does not help — it makes things worse.**
+`tools/steam64shim.c` is an `LD_PRELOAD` that rewrites `utsname.machine` to
+`x86_64`. It works, and Steam gets past the assert, and then tries to launch
+the things the check was gating:
 
-```sh
-gcc -shared -fPIC -O2 -o ~/.local/lib/steam64shim.so tools/steam64shim.c -ldl
-LD_PRELOAD=~/.local/lib/steam64shim.so ./steam.sh
+```
+steamwebhelper.sh: Starting steamwebhelper ... steamrt64/pv-runtime/...
+pressure-vessel-wrap: 1: Syntax error: ")" unexpected
+steam-runtime-launcher-service: 1: ELF: not found
+CSteamEngine::BMainLoop appears to have stalled > 15 seconds
 ```
 
-⚠ **It does not make the machine 64-bit.** Steam's `ubuntu12_64` helpers
-(`gldriverquery`, `vulkandriverquery`) still cannot execute — they fail as
-`Syntax error: ")" unexpected`, which is a shell trying to interpret a 64-bit
-ELF — and no 64-bit game will run. This gets the client up; it is not a route
-to 64-bit titles.
+Those are 64-bit ELFs a 32-bit kernel cannot execute, so the shell falls back
+to parsing them as text. Since the 2023 UI rewrite `steamwebhelper` *is* the
+interface, so it never renders and the client hangs — which on the reference
+machine presented as a UI crash followed by a freeze. The check is
+load-bearing, not cosmetic. The shim is kept only as a documented failure.
 
-⚠ Valve's archived `.deb`s are **bootstrappers, not clients**. An old launcher
-still downloads today's client, so there is no "install the 2023 version"
-shortcut; and Valve does not publish standalone archived clients.
+⚠ There is no "install the older version" route either. Valve's archived
+`.deb`s are **bootstrappers, not clients**: an old launcher still downloads
+today's client, and Valve publishes no standalone archived clients.
+
+The one target where Steam is theoretically possible is **aarch64 via FEX**,
+which emulates x86_64 and would satisfy the check honestly. Untested here, and
+a Pi 4 would run the client rather than any game.
 
 ### Disc images, from the file manager
 
