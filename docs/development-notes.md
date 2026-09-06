@@ -85,73 +85,97 @@ The two settings are not alternatives. Without `via-agp` the GART is 128 MiB
 and the shortfall lands in system RAM until the OOM killer takes Xorg; without
 `vram_pushbuf` the AGP path is fast and wedges. Both, or neither works.
 
-### ⚠ The OOM measurement does not fit that explanation (2026-09-06, unconfirmed)
+### The freeze is a wedged GPU channel, and it is NOT the OOM (2026-09-06)
 
-The netconsole capture has now caught the kill five times, and it does not look
-like a machine running out of memory:
+The netconsole capture caught the kill five times, and the whole story above
+turned out to be two separate things that were being read as one.
 
-```
-nouveau …: gr: intr 00100000 [ERROR] … [BAD_ARGUMENT] ch 1 [… Xorg[16942]]   ×16
-Out of memory: Killed process 16942 (Xorg) total-vm:382360kB, anon-rss:19036kB
-```
-
-**Xorg is killed at ~380 MB of address space and ~90 MB resident, on a 2 GB
-machine.** Every one of the five is within 10 MB of that. wireplumber,
-pipewire, lightdm, Thunar, xfwm4, xfce4-panel, xfdesktop and tumblerd have all
-been taken in the same sweeps.
-
-⛔ **The scarce resource is LOWMEM, not memory.** This is a HIGHMEM i686
-kernel, and the split is brutal:
+**What the freeze actually is.** Under GL load the desktop reproduces in about a
+minute, and `Xorg` goes into **`D` state** — uninterruptible sleep. That is why
+the mouse still moves: the cursor is drawn by the GPU and keeps working while
+the server is stuck in the kernel. `/proc/<xorg>/stack` says exactly where:
 
 ```
-LowTotal   837.7 MiB     LowFree   197.0 MiB     <- everything the kernel has
-HighTotal 1160.9 MiB     HighFree  869.2 MiB     <- barely touched
+nouveau_fence_wait_legacy+0xa4/0x1d0 [nouveau]
+dma_fence_wait_timeout → dma_resv_wait_timeout
+nouveau_gem_ioctl_pushbuf+0xbd8/0x1000 [nouveau]
+drm_ioctl → nouveau_drm_ioctl → __ia32_sys_ioctl
 ```
 
-Measured **sitting at the lightdm greeter with no session logged in.** Of the
-640 MiB of lowmem in use, slab + page tables + kernel stacks + vmalloc account
-for 52 MiB:
+Xorg is waiting on a GPU fence that never signals. The order in `dmesg` is
+consistent every time: a GL client faults the graphics engine —
 
 ```
-  lowmem in use         640.8 MiB
-  slab+pgt+stk+vmap      52.4 MiB
-  UNACCOUNTED           588.3 MiB   <- pinned by a driver
+nouveau: gr: intr … nsource [DMA_VTX_PROTECTION] nstatus [PROTECTION_FAULT]
+         ch 3 [… glxgears[1013]] subc 7 class 4097
 ```
 
-It is steady, not leaking (`LowFree` unchanged over 20 s at idle), and
-`buddyinfo` shows ZONE_NORMAL still holding order-9 and order-10 blocks, so it
-is consumption and not fragmentation. So the OOM killer fires on ZONE_NORMAL
-while ~870 MiB of highmem sits free, picks the largest RSS in the room, and
-that is Xorg — which is why it looks like a graphics fault and reads in the log
-as a memory problem that the free memory flatly contradicts.
+— the FIFO then fills with `CACHE_ERROR` (1555 lines in one session, most of
+them `ch N [unknown]`, the channel already gone), the engine stops retiring
+fences, and Xorg's next pushbuf blocks forever. Every 15 s the retry logs
 
-⚠ **Which allocation it is has NOT been established**, and the guess that fits
-the number is exactly the sort of thing this file exists to stop being repeated
-as fact. 588 MiB is suspiciously close to the 512 MiB GART, and nouveau is the
-only plausible consumer of that much pinned lowmem on this box — but an AGP
-aperture does not pin RAM by itself, pages are bound into it on demand, so the
-arithmetic matching is not proof.
+```
+nouveau: Xorg[1240]: reloc wait_idle failed: -16      (-EBUSY)
+nouveau: Xorg[1240]: failed to idle channel 1
+```
 
-⚠ **If it is the GART, the paragraph above has the causation backwards** — a
-128 MiB GART would leave ~380 MiB more lowmem, and the fallback that section
-warns against would be the fix rather than the fault. Do not act on that until
-it is measured; both readings explain the same freeze.
+⛔ **Both documented mitigations are already in place and neither prevents it.**
+`nouveau.vram_pushbuf=1` is on the command line *and genuinely in effect* — the
+parameter exists in this kernel (`/sys/module/nouveau/parameters/vram_pushbuf`,
+and `modinfo` lists it), so this is **not** another `agpmode`-style silently
+ignored option. `PageFlip false` is in `20-modesetting.conf`. The wedge happens
+anyway.
 
-**What settles it**, neither of which is possible unprivileged:
+⚠ The faults originate in a **client's** channel and the casualty is **Xorg's**.
+That matches the note above that these faults are benign from `glxgears` alone —
+they are, right up until the engine stops retiring fences for everyone.
 
-- `dmesg | grep -i agp` for the line naming the negotiated GART size, and
-  `/sys/kernel/debug/dri/0/` for what TTM has bound.
-- One boot with the aperture reduced (it is a BIOS setting) or with AGP off via
-  `install via_agp /bin/true`, then re-read `LowFree` at the greeter. A jump of
-  a few hundred MiB proves it; no change exonerates AGP entirely.
+### ⛔ The AGP explanation above is wrong, and so was my first correction of it
 
-⚠ `dmesg` is restricted to root here (`kernel.dmesg_restrict=1`) and there is
-no syslog daemon, so `/var/log/dmesg.log` — root-only, written once at boot —
-is the only on-disk kernel log. The netconsole stream is the only live one, and
-`loglevel=4` means it carries the `Killed process` line but **not** the
-`Mem-Info` dump that would have shown the per-zone breakdown at the moment of
-the kill. Raising the console loglevel is worth doing before the next attempt.
+The OOM kills are real and they are **lowmem** exhaustion, not memory
+exhaustion: Xorg is killed at ~380 MB of address space and ~90 MB resident while
+~870 MiB of highmem sits free, because this is a HIGHMEM i686 kernel where
+everything the kernel allocates must come from an 838 MiB zone.
 
+⛔ **But the 512 MiB AGP GART is not what consumes it.** Measured across three
+boots, at the greeter:
+
+| configuration | GART | LowFree |
+|---|---|---|
+| `modprobe.blacklist=nouveau` | — | 750 MiB |
+| nouveau + AGP | 512 MiB | 739 MiB |
+| nouveau, `install via_agp /bin/true` | 128 MiB | 745 MiB |
+
+The GART size makes **no difference at boot**. Nor is it a GL client leak:
+six `glxgears` runs moved `LowFree` by 0.1 MiB, a full XFCE session by nothing
+over three minutes, and stopping Xorg outright returned 0.5 MiB.
+
+⚠ **A number that looked conclusive because the boots were not comparable.**
+An earlier pass here recorded 588 MiB "pinned by a driver" and put the GART next
+to it. That figure came from a machine 2½ hours into a session; the boots it was
+compared against were fresh. The consumption is real and still unexplained — it
+appears over hours of use and nothing yet reproduces it on demand — but nothing
+supports blaming the GART, and the fallback the section above warns against
+neither helps nor hurts.
+
+`/var/service/lowmem-watch` samples ZONE_NORMAL every minute to
+`/var/log/lowmem-watch.log`, with a column for the part no counter accounts for,
+so the ramp can be read after the fact rather than guessed at.
+
+⚠ `kernel.printk = 7` is now set in `/etc/sysctl.d/60-ember-oom-verbose.conf`.
+At `loglevel=4` netconsole carried the `Killed process` line but **not** the
+`Mem-Info` dump naming the exhausted zone, which is the difference between a
+diagnosis and an inference.
+
+### What has not been tried
+
+`AccelMethod "none"` takes Xorg's 2D out of the GPU command stream entirely
+while leaving DRI3 for direct-rendering clients — it targets exactly the channel
+that wedges. ⚠ It must be checked against `glxinfo -B | grep Accelerated`
+immediately after, because the failure mode of getting this wrong is a silent
+drop to llvmpipe, which is the same symptom this file already warns about twice.
+Also untried: XFCE's compositor off, which is the other big consumer of the 2D
+path through glamor, and is already an open question above.
 
 ## Swap
 
