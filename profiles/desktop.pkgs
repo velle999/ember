@@ -5,11 +5,23 @@
 # without a text editor.
 xorg-minimal
 xorg-fonts
-# ⚠ glxinfo lives here, and on hardware this old it is the FIRST thing anyone
-# needs: "is this the real driver or llvmpipe" is the question behind most
-# performance complaints, and without it there is no way to ask. Its absence
-# cost a round trip on the Pentium 4.
+# ⛔ glxinfo IS ITS OWN PACKAGE ON VOID — it is NOT part of mesa-demos, which
+# this file used to claim. `xbps-install mesa-demos` then answers "already
+# installed" while glxinfo is still missing, which reads as a broken install
+# rather than a wrong package name. That claim cost a round trip on the
+# Pentium 4 a second time, having been written to prevent the first.
+#
+# On hardware this old it is the first thing anyone needs: "is this the real
+# driver or llvmpipe" is the question behind most performance complaints.
+glxinfo
 mesa-demos
+# ⚠ Diagnosing a display problem on a machine you can only reach over ssh
+# needs a way to see what is actually on screen. `xwd -id <win>` reads a
+# window's contents even when the screen is DPMS-blanked, and wmctrl lists
+# what exists — together they are how a game that "freezes" turns out to be a
+# modal dialog nobody could see. Both are tiny.
+xwd
+wmctrl
 xf86-input-libinput
 xinit
 xfce4
