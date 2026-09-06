@@ -125,6 +125,20 @@ ln -sf /etc/sv/sshd  .
 [ -d /etc/sv/agetty-ttyS0 ]  && ln -sf /etc/sv/agetty-ttyS0  . || true
 [ -d /etc/sv/agetty-ttyAMA0 ] && ln -sf /etc/sv/agetty-ttyAMA0 . || true
 if [ "$TIER" = desktop ]; then
+    # ⛔ REMOVE dhcpcd BEFORE ENABLING NetworkManager, and removing is the
+    # operative word — the warning above was already written and it still
+    # happened, because Void's rpi4-base package enables dhcpcd on the ARM side
+    # without being asked. Enabling NM beside it produced exactly the documented
+    # failure: NetworkManager marks every interface another manager holds as
+    # "unmanaged", so eth0 was unmanaged, wlan0 was never brought up at all, and
+    # a Pi with correct credentials on the card never joined the network.
+    #
+    # ⚠ A comment is not a guard. This is the second default a dependency has
+    # set behind my back (sshd was the first), so the safe assumption is that
+    # the service set is whatever the packages decided, not whatever this script
+    # enabled — and anything that must be OFF has to be turned off explicitly.
+    rm -f /etc/runit/runsvdir/default/dhcpcd \
+          /etc/runit/runsvdir/default/dhcpcd-eth0
     ln -sf /etc/sv/elogind        .
     ln -sf /etc/sv/polkitd        .
     ln -sf /etc/sv/NetworkManager .
@@ -149,6 +163,16 @@ fi
 # seconds".
 if [ -f /etc/nsswitch.conf ] && ! grep -q mdns /etc/nsswitch.conf; then
     sed -i 's/^\(hosts:.*\)files\(.*\)$/\1files mdns_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf
+fi
+
+# ⛔ PROVE THE CONFLICT IS GONE. Two network managers is silent — you get a
+# machine that looks configured and never joins anything.
+if [ "$TIER" = desktop ]; then
+    if [ -e /etc/runit/runsvdir/default/dhcpcd ] && \
+       [ -e /etc/runit/runsvdir/default/NetworkManager ]; then
+        echo "chroot-setup: BOTH dhcpcd and NetworkManager are enabled" >&2
+        exit 1
+    fi
 fi
 
 # ⛔ An explicit success. Nothing below may be a bare `test && command`.

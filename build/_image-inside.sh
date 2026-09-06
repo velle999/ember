@@ -75,6 +75,16 @@ fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
+# ⛔ modesetting + glamor, NOT the legacy nouveau DDX. Xorg autoconfigures
+# `nouveau` first on an NVIDIA card, and that driver is deprecated and DRI2-only:
+# "screen 0 does not appear to be DRI3 capable". The result is a great deal of
+# redundant buffer copying, which presents as a laggy cursor and hitching menus
+# on hardware that is otherwise perfectly capable — a 1999 game on a 2006 card.
+#
+# With this, Xorg reports:
+#     modeset(0): glamor X acceleration enabled on NV4B
+# which is the same GPU doing the same work down a much shorter path.
+install -Dm644 /installer/20-modesetting.conf /mnt/etc/X11/xorg.conf.d/20-modesetting.conf
 
 # ── libretro cores ──────────────────────────────────────────────────────────
 # ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the
