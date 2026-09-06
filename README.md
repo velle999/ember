@@ -458,6 +458,32 @@ To check it took, on the running Pi:
 cat /sys/class/drm/card1-HDMI-A-1/modes   # exactly one line = the EDID loaded
 ```
 
+### The elogind respawn loop
+
+⛔ **lightdm must wait for elogind, not just dbus.** elogind has two owners —
+runit's service, and D-Bus activation via
+`org.freedesktop.login1.service` (`Exec=elogind --daemon`). Whichever loses the
+race respawns for the life of the boot, because runit restarts a service whose
+run script exits and `elogind.wrapper` exits immediately when it finds a daemon
+already running:
+
+```
+elogind[18058]: elogind is already running as PID 636
+```
+
+With a manual login runit wins easily and nobody notices. **With autologin it
+loses every time**: lightdm brings a session up about twelve seconds into boot,
+that session asks D-Bus for `login1`, and activation gets there first. On the
+reference machine that was 2368 restarts in forty minutes and ~19000 PIDs
+against a `pid_max` of 32768 — constant fork/exec on a 3 GHz Pentium 4, which
+presents as a desktop that feels unstable and occasionally drops to the login
+screen. It sends you looking at the GPU, which is the wrong place.
+
+`build/_chroot-setup.sh` adds one line to `/etc/sv/lightdm/run`, the same idiom
+elogind's own script uses to wait for dbus, and fails the build if it is not
+there afterwards. ⚠ That file belongs to Void's lightdm package, so an upgrade
+drops a `.pacnew` and reverts it on an installed machine.
+
 ## Not done yet
 
 - **Unreal Tournament's native Linux build** segfaults inside Mesa's `nv30`

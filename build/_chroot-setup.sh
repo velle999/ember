@@ -158,6 +158,39 @@ if [ "$TIER" = desktop ]; then
           /etc/runit/runsvdir/default/dhcpcd-eth0
     enable_sv elogind polkitd NetworkManager lightdm
 
+    # ⛔ AND LIGHTDM MUST WAIT FOR elogind, or elogind respawns once a second
+    # for the life of the boot.
+    #
+    # elogind has TWO owners: runit's service, and D-Bus activation
+    # (/usr/share/dbus-1/system-services/org.freedesktop.login1.service, which
+    # is `Exec=elogind --daemon`). Whichever loses the race then thrashes —
+    # runit restarts a service whose run script exits, and elogind.wrapper
+    # exits immediately when it finds a daemon already up:
+    #
+    #   elogind[18058]: elogind is already running as PID 636
+    #
+    # With a manual login runit wins easily and nobody notices. With autologin
+    # lightdm brings a session up about twelve seconds into boot, that session
+    # asks D-Bus for login1, and activation wins EVERY time: 2368 restarts in
+    # forty minutes on the reference machine, ~19000 PIDs against a pid_max of
+    # 32768, constant fork/exec on a 3 GHz Pentium 4. It presents as a desktop
+    # that feels unstable and occasionally drops to the login screen, which
+    # sends you looking at the GPU.
+    #
+    # One line, and it is the idiom /etc/sv/elogind/run already uses to wait
+    # for dbus. ⚠ /etc/sv/lightdm/run is Void's file, so an upgrade drops a
+    # .pacnew and reverts this; the check below fails the build rather than
+    # letting a future image ship without it.
+    #
+    # ⚠ @ as the sed delimiter, NOT |. The line being matched contains `||`,
+    # which closes a |-delimited expression early — sed then rejects it and
+    # the substitution silently does nothing.
+    if [ -f /etc/sv/lightdm/run ] && ! grep -q "sv check elogind" /etc/sv/lightdm/run; then
+        sed -i "s@^sv check dbus >/dev/null || exit 1\$@&\n# Wait for runit's elogind too: lightdm's first session otherwise\n# D-Bus-activates a second elogind and the supervised copy respawns\n# once a second forever. Worst with autologin, which logs in at boot.\nsv check elogind >/dev/null || exit 1@" /etc/sv/lightdm/run
+    fi
+    grep -q "sv check elogind" /etc/sv/lightdm/run || {
+        echo "chroot: lightdm run script does not wait for elogind" >&2; exit 1; }
+
     # ── audio ───────────────────────────────────────────────────────────────
     # ⛔ INSTALLING pipewire WIRES UP NOTHING ON VOID. The package ships the
     # daemons, the autostart .desktop files and the config fragments, and then
