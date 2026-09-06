@@ -352,6 +352,42 @@ ninja -j2
   way, which makes it look configured when it is not — check
   `BUILD_THUNKS` in `Build/CMakeCache.txt`, not the presence of that file.
 
+### Thunks need two things Void aarch64 does not have (2026-09-06)
+
+Turning `-DBUILD_THUNKS=True` on is not the end of it. The guest half of a
+thunk is an **x86_64** shared library, so it is a cross-build, and the Pi has
+neither piece of a cross toolchain:
+
+⛔ **`lld` is not installed, and the thunk build forces it.**
+`Data/CMake/toolchain_x86_64.cmake` sets `-fuse-ld=lld` into all three linker
+flag variables the moment `ENABLE_CLANG_THUNKS` is on, and prints *"Force
+enabling LLD as well"* while doing it. Void splits the linker out of the LLVM
+meta package, so `clang21` is installed and `ld.lld` is not:
+
+```
+clang++: error: invalid linker name in argument '-fuse-ld=lld'
+```
+
+⚠ The failure surfaces as CMake's *"is not able to compile a simple test
+program"*, which reads like a broken compiler. It is a missing linker. Install
+`lld21` — match the clang version, not the meta package.
+
+⛔ **`X86_DEV_ROOTFS` defaults to `/`, which here is aarch64.** FEX passes it
+to the guest build as `--sysroot`, so the cross-compile has no x86_64 headers,
+no `crt1.o` and no `libc.so` to link against.
+
+⚠ **The FEX RootFS cannot be used for this.** `Ubuntu_24_04` is a *runtime*
+rootfs: 1.9 GB extracted, and `/usr/include` holds exactly three entries
+(`X11`, `gnumake.h`, `renderdoc_app.h`). No `stdio.h`, no `crt1.o`, no
+`libc.so`, no `GL/gl.h`. Pointing `X86_DEV_ROOTFS` at it looks reasonable and
+fails the same way.
+
+What it would actually take: unpack Ubuntu 24.04 **amd64** `-dev` debs
+(`libc6-dev`, `linux-libc-dev`, `libx11-dev`, `libgl-dev`, …) into a sysroot
+directory and build with `-DX86_DEV_ROOTFS=<that>`. Untried. Weigh it against
+the section above first — thunks buy hardware GL, and the client is short of
+usable for reasons that are not only GL.
+
 ⛔ **Void ships no `erofsfuse`**, so FEXServer cannot mount the `.ero` rootfs and
 dies with a bare `terminate called without an active exception`. Extract it
 instead — `fsck.erofs --extract=DIR --overwrite img.ero` — and point
