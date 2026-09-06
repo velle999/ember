@@ -73,6 +73,8 @@ if [ -f /installer/wifi.nmconnection ]; then
     echo "inside: wifi connection pre-seeded"
 fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
+install -Dm755 /installer/ember-swap /mnt/usr/bin/ember-swap
+install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember-swap.sh
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 # ⛔ modesetting + glamor, NOT the legacy nouveau DDX. Xorg autoconfigures

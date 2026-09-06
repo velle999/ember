@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# ember-swap — put a swapfile on the root filesystem, once, on first boot.
+#
+# ⛔ EMBER'S TARGETS DO NOT HAVE ENOUGH RAM TO GO WITHOUT ONE. The reference
+# Pentium 4 has 2 GB and the Raspberry Pi 4 has 1830 MB, and both hit the OOM
+# killer doing ordinary things:
+#
+#   - the P4 lost Xorg to the OOM killer, which reads as a hard freeze with a
+#     still-moving mouse cursor and looks nothing like a memory problem
+#   - the Pi could not link FEX at all until a swapfile existed
+#
+# ⚠ NOT SHIPPED IN THE IMAGE. A swapfile inside the .img would be several GB
+# written to the stick or SD card for nothing, and the image is sized to be
+# writable to a nominal 8 GB device. It is created here, after
+# ember-expand-root has grown the filesystem to fill the disk — which is why
+# this runs at 07 and the expand runs at 06.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+SWAP=/swapfile
+
+# Already sorted, by us or by the installer or by hand.
+[ -e "$SWAP" ] && exit 0
+grep -qs '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab && exit 0
+[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -gt 0 ] && exit 0
+
+ram_mb=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+[ "$ram_mb" -gt 0 ] || exit 0
+
+# Twice RAM is the old rule and it is still about right at this size; 4 GB is
+# plenty and keeps the file from dominating a small disk.
+want_mb=$((ram_mb * 2))
+[ "$want_mb" -gt 4096 ] && want_mb=4096
+
+# ⚠ Leave the machine room to work. A swapfile that fills the disk trades one
+# unusable failure for another, and this runs before anyone has installed
+# anything, so "free now" is as good as it ever gets.
+free_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+[ "$((free_mb - want_mb))" -ge 2048 ] || exit 0
+
+# ⚠ fallocate then dd: fallocate is instant but leaves unwritten extents on
+# some filesystems, and swapon refuses a file with holes. dd is slow on an SD
+# card, so it is the fallback rather than the default.
+if ! fallocate -l "${want_mb}M" "$SWAP" 2>/dev/null; then
+    dd if=/dev/zero of="$SWAP" bs=1M count="$want_mb" status=none 2>/dev/null || {
+        rm -f "$SWAP"; exit 0; }
+fi
+
+# ⛔ 0600 OR swapon REFUSES IT, with "insecure permissions".
+chmod 600 "$SWAP"
+chown 0:0 "$SWAP"
+
+mkswap "$SWAP" >/dev/null 2>&1 || { rm -f "$SWAP"; exit 0; }
+swapon "$SWAP" 2>/dev/null || { rm -f "$SWAP"; exit 0; }
+
+grep -qs '^/swapfile' /etc/fstab || printf '/swapfile\tnone\tswap\tdefaults\t0 0\n' >> /etc/fstab
+exit 0

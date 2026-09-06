@@ -505,6 +505,26 @@ elogind's own script uses to wait for dbus, and fails the build if it is not
 there afterwards. ⚠ That file belongs to Void's lightdm package, so an upgrade
 drops a `.pacnew` and reverts it on an installed machine.
 
+### Swap
+
+⛔ **Ember's targets do not have enough RAM to run without it**, and both
+reference machines proved it doing ordinary things:
+
+- the Pentium 4 (2 GB) lost **Xorg to the OOM killer**, which presents as a
+  hard freeze with a still-moving mouse cursor and looks nothing like a memory
+  problem
+- the Raspberry Pi 4 (1830 MB) **could not link FEX at all** until a swapfile
+  existed
+
+So `ember-swap` runs once on first boot and makes one: twice RAM, capped at
+4 GB, and skipped entirely unless at least 2 GB would still be free afterwards
+— a swapfile that fills the disk trades one unusable failure for another.
+
+⚠ **Not shipped inside the image.** Several GB of zeroes written to a stick for
+nothing, on an image sized to fit a nominal 8 GB device. It is created at
+`07-ember-swap.sh`, after `06-ember-expand.sh` has grown the root to fill the
+disk — before that, "free space" is the image's own few hundred MB of slack.
+
 ## Not done yet
 
 - **Unreal Tournament's native Linux build** segfaults inside Mesa's `nv30`
