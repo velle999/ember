@@ -98,7 +98,7 @@ sh tools/hw-probe.sh --tsv
 
 ## Building
 
-Needs docker (for xbps), and qemu to test.
+Needs docker (for xbps), and qemu to test. Building the **aarch64** image additionally needs `qemu-user-static` registered with `binfmt_misc` — see [Building for the Raspberry Pi](#building-for-the-raspberry-pi).
 
 ```sh
 build/validate-profiles.sh        # every package name still exists, per arch
@@ -112,6 +112,42 @@ sudo build/write-usb.sh           # write it to a stick, safely
 anything that is not a real, removable, unmounted block device — because `dd` to
 a device letter that has moved does not fail, it creates a file in `/dev`, which
 is RAM.
+
+### Building for the Raspberry Pi
+
+Same two scripts, different architecture — but the ARM path needs one thing
+first. **The chroot runs the target's own binaries**, and unlike i686 (which an
+x86_64 host executes natively) ARM binaries need `qemu-user-static` registered
+with `binfmt_misc`. Both scripts refuse to run without it rather than produce a
+rootfs whose package scriptlets all silently failed:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install arm64   # any host
+sudo pacman -S qemu-user-static qemu-user-static-binfmt          # Arch
+sudo apt install qemu-user-static binfmt-support                 # Debian
+```
+
+Then:
+
+```sh
+build/fetch-cores.sh aarch64        # 424 libretro cores
+build/mkrootfs.sh aarch64 desktop
+build/mkimage.sh  aarch64 desktop   # FAT firmware partition + ext4 root
+sudo build/write-usb.sh             # same guard rails, for the SD card
+```
+
+`RPI_MODEL` selects the board (default `4`). The output is not a BIOS disk image
+but a FAT firmware partition carrying `config.txt` and the Pi's own bootloader
+files, plus an ext4 root — which is why it needs its own image script rather
+than the i686 one.
+
+For a small panel with no EDID, add `EMBER_PI_MODE` / `EMBER_PI_ROTATE` /
+`EMBER_PI_DIAG` — see [A panel with no EDID](#a-panel-with-no-edid):
+
+```sh
+EMBER_PI_MODE="480 800 65" EMBER_PI_ROTATE=ccw EMBER_PI_DIAG=4 \
+    build/mkimage.sh aarch64 desktop
+```
 
 ### Emulation and old games
 

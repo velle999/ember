@@ -17,12 +17,13 @@
 #
 # ⚠ THE CHROOT RUNS THE TARGET'S OWN BINARIES, and for i686 that is free: 32-bit
 # x86 executes natively on an x86_64 host, so grub-install and dracut inside the
-# chroot are the i686 ones without any emulation. aarch64 would need
-# qemu-user-static, which is why that path is refused for now rather than
-# quietly producing something wrong.
+# chroot are the i686 ones without any emulation. aarch64 needs qemu-user-static
+# registered in binfmt_misc, and is REFUSED without it rather than quietly
+# producing something wrong — see the arch dispatch below.
 #
 # Usage:
 #   build/mkimage.sh i686 desktop
+#   build/mkimage.sh aarch64 desktop          # Raspberry Pi 4/5
 #   EMBER_USER=velle EMBER_PASS=hunter2 build/mkimage.sh i686 desktop
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
