@@ -167,6 +167,65 @@ At `loglevel=4` netconsole carried the `Killed process` line but **not** the
 `Mem-Info` dump naming the exhausted zone, which is the difference between a
 diagnosis and an inference.
 
+### ⛔ FOUND IT: TTM allocates with GFP_DMA32, and this kernel has no ZONE_DMA32
+
+With `kernel.printk=7` in place, netconsole finally carried the OOM's own stack
+instead of just the `Killed process` line, and it names the mechanism outright:
+
+```
+Xorg invoked oom-killer: gfp_mask=0x100cc4(GFP_USER|GFP_DMA32), order=0
+  __ttm_pool_alloc [ttm] <- ttm_pool_alloc <- nouveau_ttm_tt_populate [nouveau]
+  <- ttm_tt_populate <- ttm_bo_populate <- ttm_bo_handle_move_mem <- ttm_bo_evict
+```
+
+⛔ **`GFP_DMA32` on i686 can only be served from ZONE_NORMAL.** There is no
+ZONE_DMA32 on a 32-bit kernel, so every page TTM populates for a buffer object
+comes out of the 838 MiB lowmem zone and **never** out of the 870 MiB of free
+highmem sitting next to it. `ttm_bo_evict` in the trace is TTM moving a buffer
+out of VRAM into system memory and populating pages for it — the eviction path
+is the one that exhausts the zone.
+
+⚠ **And TTM's own ceiling is computed from the wrong number.** `ttm.pages_limit`
+defaults to a fraction of `totalram_pages()`, which here counts highmem — about
+2 GB of RAM, so a limit near 1 GB of pages. Those pages can only come from
+838 MiB of lowmem, so **TTM cannot reach its own limit before it exhausts the
+zone.** It never applies the brake, because by its arithmetic there is plenty
+left.
+
+**That is one fault, not two.** The channel wedge is downstream: two seconds
+before the OOM above,
+
+```
+nouveau: fifo: DMA_PUSHER - ch 1 [Xorg[669]] ... (err: INVALID_CMD)
+```
+
+Allocation failures leave nouveau unable to populate buffers, submission goes
+bad (`DMA_PUSHER`, then the `CACHE_ERROR` storm), the engine stops retiring
+fences, and Xorg blocks forever in `nouveau_fence_wait_legacy`. Whichever
+arrives first is what you see: a frozen desktop with a moving cursor, or Xorg
+killed by the OOM killer. Both start here.
+
+⛔ It can take the whole machine with it. On 2026-09-06 the box stopped
+responding to ping part-way through printing the trace above and needed a power
+cycle — netconsole is the only reason any of it was recorded.
+
+**The fix to try first:** bound TTM below the size of lowmem, on the kernel
+command line —
+
+```
+ttm.pages_limit=65536        # 256 MiB, against 838 MiB of lowmem
+```
+
+`pages_limit` is writable at runtime too (`/sys/module/ttm/parameters/`), so it
+can be tested without a reboot. The point is to make TTM evict or refuse at a
+number that leaves the kernel room, instead of one derived from RAM it cannot
+use.
+
+⚠ This also retires the AGP theory properly. A smaller GART would have bounded
+the same thing by accident — it caps how much can be bound into GTT at once —
+which is why disabling AGP looked like it helped. The GART size is not the cause
+and capping TTM is the direct control.
+
 ### What has not been tried
 
 `AccelMethod "none"` takes Xorg's 2D out of the GPU command stream entirely
