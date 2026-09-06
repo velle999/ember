@@ -218,6 +218,39 @@ never matches, because Linux truncates a process name to 15 characters
 (`UnrealTournamen`). A "killed" instance survives and later tests read its stale
 windows.
 
+### Steam on a 32-bit host
+
+Steam's client binaries are still 32-bit i386 — `ubuntu12_32/steam` and
+`steamui.so` both are. What stops it on a 32-bit-only machine is narrower than
+that: `Is64BitOS()` in `steamui.so` reads `uname(2)` and asserts when
+`utsname.machine` is not `x86_64`.
+
+Everything else works. On the reference P4 the client downloads, extracts,
+loads the 32-bit `steamui.so` and reports `Running Steam on void  32-bit`,
+given two packages that are easy to miss:
+
+- **`gtk+`** (GTK2) — without it `steamui.so` fails with
+  `libgtk-x11-2.0.so.0: cannot open shared object file`
+- **`xz`** — without it the runtime never unpacks and the failure surfaces much
+  later as missing files inside the runtime
+
+`tools/steam64shim.c` answers just that one check:
+
+```sh
+gcc -shared -fPIC -O2 -o ~/.local/lib/steam64shim.so tools/steam64shim.c -ldl
+LD_PRELOAD=~/.local/lib/steam64shim.so ./steam.sh
+```
+
+⚠ **It does not make the machine 64-bit.** Steam's `ubuntu12_64` helpers
+(`gldriverquery`, `vulkandriverquery`) still cannot execute — they fail as
+`Syntax error: ")" unexpected`, which is a shell trying to interpret a 64-bit
+ELF — and no 64-bit game will run. This gets the client up; it is not a route
+to 64-bit titles.
+
+⚠ Valve's archived `.deb`s are **bootstrappers, not clients**. An old launcher
+still downloads today's client, so there is no "install the 2023 version"
+shortcut; and Valve does not publish standalone archived clients.
+
 ### Disc images, from the file manager
 
 Six Thunar right-click actions ship in `/etc/xdg/Thunar/uca.xml`: mount and

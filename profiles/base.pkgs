@@ -41,3 +41,8 @@ nano
 less
 which
 xbps
+# ⛔ xz IS NOT INSTALLED BY DEFAULT even though xbps uses liblzma — the library
+# is not the command. Its absence is silent and remote: a script that unpacks a
+# .tar.xz fails with `xz: command not found` deep inside whatever it was doing.
+# Steam's bootstrapper hit exactly this and left a half-extracted runtime.
+xz

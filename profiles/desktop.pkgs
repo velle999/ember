@@ -47,6 +47,10 @@ lightdm-gtk3-greeter
 # ⚠ alsa-utils is NOT optional alongside pipewire: without it there is no
 # amixer to unmute a card that boots silent, and no alsactl to persist the
 # level across reboots. desktop-min already had it; desktop did not.
+# ⚠ GTK2 is long dead upstream and still required by a surprising amount of
+# what this project exists to run — including Steam's own 32-bit steamui.so,
+# which fails with `libgtk-x11-2.0.so.0: cannot open shared object file`.
+gtk+
 alsa-utils
 pipewire
 wireplumber
