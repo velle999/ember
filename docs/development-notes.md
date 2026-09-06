@@ -213,6 +213,37 @@ this marginal, one clean pass means nothing. Soak it.
 NOT stable on this board.** 2D is fine; the desktop is usable; GL is what breaks
 it, and there is nothing left to turn off.
 
+### The vertex path is most of it — `NV30_SWTNL=1` buys 4 soaks, then fails too
+
+`nsource` on the faults is `DMA_VTX_PROTECTION`: the **vertex** DMA object
+pointing somewhere invalid. (`class 4097` is printed in hex — `0x4097` is
+`NV40_3D`.) Mesa's nv30 driver has `NV30_SWTNL=1`, which moves vertex transform
+onto the CPU and bypasses that path, and it is by far the best result of
+anything tried:
+
+| | soaks survived |
+|---|---|
+| stock | wedges on run **1** |
+| `NV30_SWTNL=1` | survived **4**, wedged on the 5th |
+
+Zero new nouveau errors during the surviving soaks, hardware GL retained
+(`Accelerated: yes`, NV4B). So the hardware vertex path is where most of the
+damage comes from — but not all of it, and this is a mitigation, not a fix.
+
+⚠ **Three mitigations now have survived several passes and then failed** (AGP
+off, forced vsync, SWTNL). That pattern is itself the finding: the driver is
+marginal everywhere, so any change shifts timing and buys a few runs. Nothing
+here is a fix until it survives a long soak, and a handful of clean passes is
+not evidence.
+
+⚠ **A retracted observation, kept because it was convincing.** Mid-soak,
+`glxinfo` — a one-shot query — was logging ~490 `CACHE_ERROR`s, which looked
+like proof the driver was broken at rest. It is not: on a clean boot `glxinfo`
+produces **zero** errors, twice over. Those errors were glxinfo running against
+a GPU already degraded by the preceding soaks. Once the engine has faulted,
+*everything* GL faults, which makes any measurement taken after the first wedge
+worthless. Reboot between tests.
+
 ### ⛔ Do not buy an HD 2600 Pro AGP — `r600` is gone from this Mesa
 
 Checked the way `nv30` was checked, by reading the driver list out of
