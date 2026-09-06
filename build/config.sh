@@ -45,21 +45,42 @@ EMBER_WINE="${EMBER_WINE:-1}"
 
 # ── The Pi's display, which cannot be autodetected on a panel with no EDID ──
 #
-# ⚠ RandR DOES NOT EXIST ON THIS TARGET. vc4 KMS never registers a display
-# device on Void's Pi 4 kernel (it binds only the hvs), so X runs on the
-# firmware framebuffer through fbdev — and fbdev has no RandR. XFCE's Display
-# settings panel is therefore BLANK, not broken, and resolution and rotation
-# have to be set here at build time instead.
+# vc4 KMS works on this target: it binds every component, registers a DRM
+# device, and X runs on `modesetting` with glamor and full RandR.
 #
-# EMBER_PI_MODE: "auto" trusts the monitor's EDID. A small HDMI panel usually
-# has none, so the firmware falls back to 640x480 and looks wrong; give it
-# "<w> <h> <hz>" to force a mode instead.
+# ⛔ THIS FILE USED TO SAY THE OPPOSITE — that vc4 "binds only the hvs and
+# never registers a display device", so X had to run on fbdev with no RandR
+# and a blank XFCE Display panel. That was wrong, and it was wrong because of
+# a fault I had introduced myself: the legacy `hdmi_cvt` / `hdmi_force_hotplug`
+# settings written below prevented vc4 from initialising, and I read the
+# resulting half-bound driver as a hardware limit. Removing them fixed it.
+#
+# EMBER_PI_MODE: "auto" trusts the monitor's EDID, which is right for a TV or
+# a monitor. A small HDMI panel usually publishes none at all, and then KMS
+# invents a CVT timing for whatever mode is asked for, the panel does not
+# recognise it, and it shows "not support" or blinks — telling you nothing
+# about which of the resolution or the timing is at fault. Setting this to
+# "<w> <h> [hz]" builds a real EDID (build/mkedid.py) and hands it to the
+# kernel, which makes the panel's mode the preferred and only one.
+#
+# ⛔ GIVE THE PANEL'S *NATIVE* MODE, WHICH IS NOT ALWAYS THE ADVERTISED ONE.
+# The 4" panel this was developed against is sold as "800x480" but is
+# physically a 480x800 portrait panel that the vendor's config rotated; the
+# vendor script's own line is `hdmi_cvt 480 800 65`. Naming the rotated size
+# here asks for a mode the panel has never had, and no amount of adjusting it
+# can work. Rotate with EMBER_PI_ROTATE, not by transposing this.
+#   Miuzei/goodtft MPI4009 4" IPS:  EMBER_PI_MODE="480 800 65" EMBER_PI_ROTATE=ccw
 EMBER_PI_MODE="${EMBER_PI_MODE:-auto}"
 
-# EMBER_PI_ROTATE: none | cw | ccw | ud. Applied in TWO places, because they are
-# genuinely separate: X gets an fbdev Rotate option, and the firmware gets
-# display_hdmi_rotate so the console and boot messages match. Setting only the
-# first leaves you booting sideways and then snapping upright when X starts.
+# EMBER_PI_DIAG: panel diagonal in inches, used only for the physical size in
+# the generated EDID (and so for the desktop's DPI). Cosmetic; leave it unset
+# and the size is derived at 96 DPI.
+EMBER_PI_DIAG="${EMBER_PI_DIAG:-}"
+
+# EMBER_PI_ROTATE: none | cw | ccw | ud. Applied in TWO places, because they
+# are genuinely separate: X gets a modesetting Rotate option, and the kernel
+# console gets fbcon=rotate so the boot messages match. Setting only the first
+# leaves you booting sideways and then snapping upright when X starts.
 EMBER_PI_ROTATE="${EMBER_PI_ROTATE:-none}"
 
 # The container that supplies xbps. Building a Void rootfs needs Void's own

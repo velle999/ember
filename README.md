@@ -246,28 +246,50 @@ a command nobody wrote.
 
 ## The Raspberry Pi's display
 
-⛔ **vc4 KMS does not work on Void's Pi 4 kernel.** It loads, binds only
-`fe400000.hvs`, and never registers a DRM device — while still taking the
-display away from the firmware's framebuffer on the way. The overlay is applied
-and both HDMI controllers report `status = okay` in the live device tree, so
-this is not a configuration problem. vc4 is therefore **blacklisted**: forcing
-it to load turns a working console into a black screen and gives nothing back.
+vc4 KMS works: it binds every component, registers a DRM device, and X runs on
+`modesetting` with glamor and full RandR. XFCE's Display settings panel works.
 
-The consequence is that X runs on the firmware framebuffer through `fbdev`:
+> ⛔ **This section used to say the opposite** — that vc4 "binds only
+> `fe400000.hvs`, never registers a DRM device", and was therefore blacklisted.
+> That was wrong. The half-bound driver was caused by the legacy `hdmi_cvt` and
+> `hdmi_force_hotplug` settings this builder itself wrote: they stop vc4
+> initialising. Removing them fixed it, and the blacklist had been costing the
+> image its hardware acceleration and its Display panel for nothing.
 
-- **software rendering** — the Pi 4's V3D sits idle for the desktop (`v3d` still
-  loads, so its render node exists for anything that uses it directly)
-- **no RandR**, so XFCE's Display settings panel is *blank rather than broken*,
-  and geometry is set at build time instead:
+### A panel with no EDID
+
+Most small HDMI panels publish no EDID at all. KMS then invents a CVT timing
+for whatever mode you name, the panel does not recognise it, and it shows
+"not support" or blinks — which tells you nothing about whether the resolution
+or the timing is at fault. `EMBER_PI_MODE` builds a real EDID
+(`build/mkedid.py`, whose timings reproduce `cvt(1)` exactly) and hands it to
+the kernel, making the panel's mode the preferred and only one:
 
 ```sh
-EMBER_PI_MODE="800 480 60" EMBER_PI_ROTATE=ccw build/mkimage.sh aarch64 desktop
+EMBER_PI_MODE="480 800 65" EMBER_PI_ROTATE=ccw EMBER_PI_DIAG=4 \
+    build/mkimage.sh aarch64 desktop
 ```
 
-`EMBER_PI_ROTATE` applies in two places — an fbdev `Rotate` option for X and
-`display_hdmi_rotate` for the firmware — so the console and the desktop agree.
-A small HDMI panel usually has no EDID, in which case the firmware falls back to
-640x480 and `EMBER_PI_MODE` is how you say otherwise.
+⛔ **Give the panel's *native* mode, which is not always the advertised one.**
+The 4" panel this was developed against (Miuzei / goodtft `MPI4009`) is sold as
+"800x480" but is physically a **480x800 portrait** panel that the vendor's
+config rotated — its own install script says `hdmi_cvt 480 800 65`. Naming the
+rotated size asks for a mode the panel has never had, and no amount of
+adjusting it can work. Rotate with `EMBER_PI_ROTATE`, not by transposing this.
+
+If a vendor shipped a driver for your panel, its install script is the fastest
+source of truth for these numbers — read it before measuring anything.
+
+`EMBER_PI_ROTATE` (`none|cw|ccw|ud`) applies in two places, a modesetting
+`Rotate` option for X and `fbcon=rotate:` for the console, so the boot messages
+and the desktop agree. `EMBER_PI_DIAG` is the diagonal in inches and only sets
+the physical size in the EDID, and so the desktop's DPI.
+
+To check it took, on the running Pi:
+
+```sh
+cat /sys/class/drm/card1-HDMI-A-1/modes   # exactly one line = the EDID loaded
+```
 
 ## Not done yet
 

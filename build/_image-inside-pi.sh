@@ -137,27 +137,47 @@ n=$(grep -c '^dtoverlay=vc4-kms-v3d' /mnt/boot/config.txt)
 [ "$n" = 1 ] || { echo "mkimage: $n vc4 overlays in config.txt, expected 1" >&2; exit 1; }
 
 # ── panel geometry (see EMBER_PI_MODE / EMBER_PI_ROTATE in config.sh) ───────
+# ⛔ NOT hdmi_cvt / hdmi_group / hdmi_force_hotplug / display_hdmi_rotate.
+# Those are LEGACY firmware settings: vc4-kms-v3d ignores every one of them,
+# and worse, they stop vc4 initialising — which is what made working hardware
+# look broken and led this file to blacklist vc4 outright. Under KMS the two
+# mechanisms are a firmware EDID and the video= cmdline.
 if [ "${PI_MODE:-auto}" != auto ]; then
+    [ -f /edid/ember-panel.bin ] || {
+        echo "mkimage: PI_MODE=$PI_MODE but no EDID was built for it" >&2; exit 1; }
     set -- $PI_MODE
-    {
-        echo "hdmi_group=2"
-        echo "hdmi_mode=87"
-        echo "hdmi_cvt=$1 $2 ${3:-60} 6 0 0 0"
-        echo "hdmi_drive=1"
-        echo "hdmi_force_hotplug=1"
-    } >> /mnt/boot/config.txt
+    install -Dm644 /edid/ember-panel.bin /mnt/usr/lib/firmware/edid/ember-panel.bin
+    # The one legacy setting that IS still honoured under KMS, because it drives
+    # the physical HDMI signal level rather than the mode. Small panels sit on a
+    # long ribbon or an adapter stack and the vendor configs all raise it.
+    echo 'config_hdmi_boost=7' >> /mnt/boot/config.txt
+    # ⚠ Appended to LINE 1, not to the file: cmdline.txt is one line and a
+    # plain >> would put this on a second one, which boots without it.
+    sed -i "1s|\$| drm.edid_firmware=HDMI-A-1:edid/ember-panel.bin video=HDMI-A-1:$1x$2@${3:-60}|" \
+        /mnt/boot/cmdline.txt
 fi
+
 case "${PI_ROTATE:-none}" in
-    cw)  fbrot=CW;  fwrot=1 ;;
-    ud)  fbrot=UD;  fwrot=2 ;;
-    ccw) fbrot=CCW; fwrot=3 ;;
-    *)   fbrot="";  fwrot="" ;;
+    cw)   xrot=right;    fbrot=1 ;;
+    ud)   xrot=inverted; fbrot=2 ;;
+    ccw)  xrot=left;     fbrot=3 ;;
+    none) xrot="";       fbrot="" ;;
+    *) echo "mkimage: EMBER_PI_ROTATE=$PI_ROTATE is not none|cw|ccw|ud" >&2; exit 1 ;;
 esac
-if [ -n "$fbrot" ]; then
-    # X's rotation and the firmware's, together — see config.sh for why both.
-    printf 'display_hdmi_rotate=%s\n' "$fwrot" >> /mnt/boot/config.txt
-    sed -i "s|^EndSection|    Option \"Rotate\" \"$fbrot\"\nEndSection|" \
-        /mnt/etc/X11/xorg.conf.d/10-fbdev.conf 2>/dev/null || true
+if [ -n "$xrot" ]; then
+    # ⛔ THE CONFIG IS WRITTEN HERE, NOT SED'D INTO ONE INSTALLED LATER. The
+    # previous version edited 10-fbdev.conf about sixty lines before that file
+    # was installed, with `2>/dev/null || true` swallowing the failure — so
+    # EMBER_PI_ROTATE silently rotated nothing, and had never once worked.
+    mkdir -p /mnt/etc/X11/xorg.conf.d
+    cat > /mnt/etc/X11/xorg.conf.d/40-panel-rotate.conf <<EOF
+Section "Monitor"
+    Identifier "HDMI-1"
+    Option     "Rotate" "$xrot"
+EndSection
+EOF
+    # The console too, so boot messages are not sideways until X starts.
+    sed -i "1s|\$| fbcon=rotate:$fbrot|" /mnt/boot/cmdline.txt
 fi
 
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n'          "$ROOTUUID" >  /mnt/etc/fstab
@@ -165,32 +185,29 @@ printf 'UUID=%s\t/boot\tvfat\tdefaults,nofail\t0 2\n'       "$BOOTUUID" >> /mnt/
 printf 'tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0\n'               >> /mnt/etc/fstab
 printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname
 
-# ⛔ FORCE vc4 AND v3d TO LOAD. Without a DRM device X has nothing to drive:
-# the firmware hands the kernel a simple-framebuffer, the console renders on it
-# perfectly, and Xorg then finds no /dev/dri/card* and dies — which looks like a
-# broken desktop rather than a missing driver. `cat /sys/class/graphics/fb0/name`
-# saying "simple" instead of "vc4" is the tell.
+# ── the display driver ──────────────────────────────────────────────────────
+# Without a DRM device X has nothing to drive: the firmware hands the kernel a
+# simple-framebuffer, the console renders on it perfectly, and Xorg then finds
+# no /dev/dri/card* and dies — which looks like a broken desktop rather than a
+# missing driver. `cat /sys/class/graphics/fb0/name` saying "simple" instead of
+# "vc4" is the tell.
 #
 # ⚠ There is NO INITRAMFS on this target, so nothing loads a module before the
-# root is mounted, and the DT modalias autoload has to happen through udev after
+# root is mounted and the DT modalias autoload has to happen through udev after
 # it. Naming them here does not depend on that working.
-# ⛔ vc4 IS DELIBERATELY NOT FORCED HERE, AND THAT IS THE OPPOSITE OF WHAT THIS
-# FILE USED TO DO. Forcing it was a regression: on this kernel/firmware pair vc4
-# binds only the hvs and never registers a DRM device, but it DOES take the
-# display away from the firmware's simple-framebuffer on the way — so a machine
-# that had a perfectly good console showing fastfetch on the TV was left with a
-# black screen and no output at all. The proof was in front of me: when vc4 was
-# modprobe'd by hand the TV went dark, and I made that happen at every boot.
 #
-# Until vc4 completes on this hardware, the firmware framebuffer is the working
-# display and nothing may be allowed to take it.
-#
-# v3d is fine and useful — it is the 3D engine and touches no display output.
+# ⛔ THIS FILE USED TO BLACKLIST vc4, AND THAT WAS WRONG. The reasoning was
+# that vc4 "binds only the hvs, never registers a DRM device, and takes the
+# display away from the firmware framebuffer on the way" — a machine with a
+# working console went black when vc4 loaded, so vc4 was blamed. The real
+# cause was the legacy hdmi_cvt/hdmi_force_hotplug settings this script wrote
+# above: they prevented vc4 from initialising. With those gone vc4 binds every
+# component, the connector reports connected, and X gets modesetting + glamor
+# with full RandR. Blacklisting it cost the image its acceleration and its
+# Display settings panel for nothing.
 mkdir -p /mnt/etc/modules-load.d
-printf 'v3d\nbrcmfmac\n' > /mnt/etc/modules-load.d/10-ember-vc4.conf
-# And actively keep vc4 out of the way rather than merely not asking for it:
-# udev will autoload it from the DT modalias otherwise, with the same result.
-printf 'blacklist vc4\n' > /mnt/etc/modprobe.d/10-ember-no-vc4.conf
+printf 'vc4\nv3d\nbrcmfmac\n' > /mnt/etc/modules-load.d/10-ember-vc4.conf
+rm -f /mnt/etc/modprobe.d/10-ember-no-vc4.conf
 
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
@@ -213,9 +230,10 @@ fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
-# X on the firmware framebuffer: card0 is v3d, which is render-only with no
-# connectors, so letting X autoconfigure finds a DRM device it cannot display on.
-install -Dm644 /installer/10-fbdev.conf /mnt/etc/X11/xorg.conf.d/10-fbdev.conf
+# ⚠ card0 is v3d, which is RENDER-ONLY and has no connectors; the display is
+# card1 (vc4). Letting X autoconfigure picks card0 and finds nothing it can
+# display on, so the OutputClass below names vc4 as the primary GPU.
+install -Dm644 /installer/10-vc4.conf /mnt/etc/X11/xorg.conf.d/10-vc4.conf
 
 # ── libretro cores ──────────────────────────────────────────────────────────
 # ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the

@@ -89,6 +89,19 @@ echo "   login   $USERNAME / $PASSWORD   (root shares the password)"
 rm -f "$IMG"
 truncate -s "${size_mb}M" "$IMG"
 
+# ── the panel's EDID, built here rather than in the container ───────────────
+# A panel with no EDID needs one supplied (see EMBER_PI_MODE in config.sh).
+# It is generated on the host because installer/ is mounted read-only and the
+# build container is not guaranteed to have python3.
+EDIDDIR="$(mktemp -d)"
+trap 'rm -rf "$EDIDDIR"' EXIT
+if [ "${EMBER_PI_MODE:-auto}" != auto ]; then
+    # shellcheck disable=SC2086  # EMBER_PI_MODE is deliberately word-split
+    python3 build/mkedid.py $EMBER_PI_MODE \
+        ${EMBER_PI_DIAG:+--diag "$EMBER_PI_DIAG"} -o "$EDIDDIR/ember-panel.bin" \
+        || { echo "mkimage: could not build the panel EDID" >&2; exit 1; }
+fi
+
 # ⚠ /dev is shared into the container because losetup creates nodes there and
 # the host has to see them go away again; --privileged alone is not enough.
 #
@@ -101,6 +114,7 @@ docker run --rm --privileged \
     -v "$PWD/$INSIDE:/image-inside.sh:ro" \
     -v "$PWD/build/_chroot-setup.sh:/chroot-setup.sh:ro" \
     -v "$PWD/installer:/installer:ro" \
+    -v "$EDIDDIR:/edid:ro" \
     -v "$PWD/cores/$ARCH:/cores:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \

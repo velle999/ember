@@ -5,3 +5,4 @@ out/
 cores/
 # Wi-Fi credentials — never committed.
 installer/wifi.nmconnection
+__pycache__/
