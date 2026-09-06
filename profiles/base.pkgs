@@ -4,6 +4,14 @@
 # replace with their own; base-minimal plus the pieces named here is the
 # smallest thing that still boots, logs in and reaches a network.
 base-minimal
+# ⛔ eudev, EXPLICITLY. base-minimal pulls eudev-libudev — the LIBRARY — and not
+# the daemon, so a system built from it runs NO udev at all. Nothing then tags
+# devices, seat0 gets no devices, elogind reports the seat as non-graphical, and
+# lightdm waits for ever for a seat that never becomes usable: a machine that
+# boots to a console and never starts X, with nothing anywhere saying why.
+# Separately it means no modalias autoloading, which is why the Pi's wifi and
+# display drivers never loaded on their own either.
+eudev
 runit-void
 dhcpcd
 iproute2

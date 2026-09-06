@@ -43,6 +43,25 @@ KERNEL_I686="linux6.18"
 # by default and switched off with EMBER_WINE=0 rather than being opt-in.
 EMBER_WINE="${EMBER_WINE:-1}"
 
+# ── The Pi's display, which cannot be autodetected on a panel with no EDID ──
+#
+# ⚠ RandR DOES NOT EXIST ON THIS TARGET. vc4 KMS never registers a display
+# device on Void's Pi 4 kernel (it binds only the hvs), so X runs on the
+# firmware framebuffer through fbdev — and fbdev has no RandR. XFCE's Display
+# settings panel is therefore BLANK, not broken, and resolution and rotation
+# have to be set here at build time instead.
+#
+# EMBER_PI_MODE: "auto" trusts the monitor's EDID. A small HDMI panel usually
+# has none, so the firmware falls back to 640x480 and looks wrong; give it
+# "<w> <h> <hz>" to force a mode instead.
+EMBER_PI_MODE="${EMBER_PI_MODE:-auto}"
+
+# EMBER_PI_ROTATE: none | cw | ccw | ud. Applied in TWO places, because they are
+# genuinely separate: X gets an fbdev Rotate option, and the firmware gets
+# display_hdmi_rotate so the console and boot messages match. Setting only the
+# first leaves you booting sideways and then snapping upright when X starts.
+EMBER_PI_ROTATE="${EMBER_PI_ROTATE:-none}"
+
 # The container that supplies xbps. Building a Void rootfs needs Void's own
 # package manager, which is not packaged for the host distributions this is
 # developed on.

@@ -136,6 +136,30 @@ printf 'root=PARTUUID=%s-02 rw rootwait fsck.repair=yes console=ttyAMA0,115200 c
 n=$(grep -c '^dtoverlay=vc4-kms-v3d' /mnt/boot/config.txt)
 [ "$n" = 1 ] || { echo "mkimage: $n vc4 overlays in config.txt, expected 1" >&2; exit 1; }
 
+# ── panel geometry (see EMBER_PI_MODE / EMBER_PI_ROTATE in config.sh) ───────
+if [ "${PI_MODE:-auto}" != auto ]; then
+    set -- $PI_MODE
+    {
+        echo "hdmi_group=2"
+        echo "hdmi_mode=87"
+        echo "hdmi_cvt=$1 $2 ${3:-60} 6 0 0 0"
+        echo "hdmi_drive=1"
+        echo "hdmi_force_hotplug=1"
+    } >> /mnt/boot/config.txt
+fi
+case "${PI_ROTATE:-none}" in
+    cw)  fbrot=CW;  fwrot=1 ;;
+    ud)  fbrot=UD;  fwrot=2 ;;
+    ccw) fbrot=CCW; fwrot=3 ;;
+    *)   fbrot="";  fwrot="" ;;
+esac
+if [ -n "$fbrot" ]; then
+    # X's rotation and the firmware's, together — see config.sh for why both.
+    printf 'display_hdmi_rotate=%s\n' "$fwrot" >> /mnt/boot/config.txt
+    sed -i "s|^EndSection|    Option \"Rotate\" \"$fbrot\"\nEndSection|" \
+        /mnt/etc/X11/xorg.conf.d/10-fbdev.conf 2>/dev/null || true
+fi
+
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n'          "$ROOTUUID" >  /mnt/etc/fstab
 printf 'UUID=%s\t/boot\tvfat\tdefaults,nofail\t0 2\n'       "$BOOTUUID" >> /mnt/etc/fstab
 printf 'tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0\n'               >> /mnt/etc/fstab
@@ -150,8 +174,23 @@ printf '%s\n' "$HOSTNAME_" > /mnt/etc/hostname
 # ⚠ There is NO INITRAMFS on this target, so nothing loads a module before the
 # root is mounted, and the DT modalias autoload has to happen through udev after
 # it. Naming them here does not depend on that working.
+# ⛔ vc4 IS DELIBERATELY NOT FORCED HERE, AND THAT IS THE OPPOSITE OF WHAT THIS
+# FILE USED TO DO. Forcing it was a regression: on this kernel/firmware pair vc4
+# binds only the hvs and never registers a DRM device, but it DOES take the
+# display away from the firmware's simple-framebuffer on the way — so a machine
+# that had a perfectly good console showing fastfetch on the TV was left with a
+# black screen and no output at all. The proof was in front of me: when vc4 was
+# modprobe'd by hand the TV went dark, and I made that happen at every boot.
+#
+# Until vc4 completes on this hardware, the firmware framebuffer is the working
+# display and nothing may be allowed to take it.
+#
+# v3d is fine and useful — it is the 3D engine and touches no display output.
 mkdir -p /mnt/etc/modules-load.d
-printf 'vc4\nv3d\n' > /mnt/etc/modules-load.d/10-ember-vc4.conf
+printf 'v3d\nbrcmfmac\n' > /mnt/etc/modules-load.d/10-ember-vc4.conf
+# And actively keep vc4 out of the way rather than merely not asking for it:
+# udev will autoload it from the DT modalias otherwise, with the same result.
+printf 'blacklist vc4\n' > /mnt/etc/modprobe.d/10-ember-no-vc4.conf
 
 install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
@@ -174,6 +213,9 @@ fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
+# X on the firmware framebuffer: card0 is v3d, which is render-only with no
+# connectors, so letting X autoconfigure finds a DRM device it cannot display on.
+install -Dm644 /installer/10-fbdev.conf /mnt/etc/X11/xorg.conf.d/10-fbdev.conf
 
 # ── libretro cores ──────────────────────────────────────────────────────────
 # ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the

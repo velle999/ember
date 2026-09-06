@@ -244,6 +244,31 @@ running shell resumes mid-token — here it re-entered a cleanup branch and
 deleted a rootfs that 650 packages had just been installed into. The error names
 a command nobody wrote.
 
+## The Raspberry Pi's display
+
+⛔ **vc4 KMS does not work on Void's Pi 4 kernel.** It loads, binds only
+`fe400000.hvs`, and never registers a DRM device — while still taking the
+display away from the firmware's framebuffer on the way. The overlay is applied
+and both HDMI controllers report `status = okay` in the live device tree, so
+this is not a configuration problem. vc4 is therefore **blacklisted**: forcing
+it to load turns a working console into a black screen and gives nothing back.
+
+The consequence is that X runs on the firmware framebuffer through `fbdev`:
+
+- **software rendering** — the Pi 4's V3D sits idle for the desktop (`v3d` still
+  loads, so its render node exists for anything that uses it directly)
+- **no RandR**, so XFCE's Display settings panel is *blank rather than broken*,
+  and geometry is set at build time instead:
+
+```sh
+EMBER_PI_MODE="800 480 60" EMBER_PI_ROTATE=ccw build/mkimage.sh aarch64 desktop
+```
+
+`EMBER_PI_ROTATE` applies in two places — an fbdev `Rotate` option for X and
+`display_hdmi_rotate` for the firmware — so the console and the desktop agree.
+A small HDMI panel usually has no EDID, in which case the firmware falls back to
+640x480 and `EMBER_PI_MODE` is how you say otherwise.
+
 ## Not done yet
 
 - **The Raspberry Pi image.** Not a BIOS disk image but a FAT firmware partition

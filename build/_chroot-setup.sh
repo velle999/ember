@@ -106,8 +106,25 @@ esac
 # fight over it; enabling the pair is the classic way to get a machine that has
 # an address for ten seconds at a time.
 cd /etc/runit/runsvdir/default
-ln -sf /etc/sv/dbus  .
-ln -sf /etc/sv/udevd .
+
+# ⛔ ENABLE ONLY WHAT EXISTS. `ln -sf /etc/sv/foo .` succeeds whether or not the
+# target exists, so a package that was never installed still produced a
+# confident-looking symlink: udevd appeared in every listing of enabled services
+# while no udev daemon was present at all. runit mentions it once, as "unable to
+# change to service directory", in a log nobody reads. This turns that into a
+# build failure.
+enable_sv() {
+    for _s in "$@"; do
+        if [ -d "/etc/sv/$_s" ]; then
+            ln -sf "/etc/sv/$_s" .
+        else
+            echo "chroot-setup: /etc/sv/$_s is missing — is its package installed?" >&2
+            exit 1
+        fi
+    done
+}
+
+enable_sv dbus udevd
 # ⛔ sshd, ON BOTH TARGETS. It was enabled on the Pi image and NOT on the PC one,
 # and neither was deliberate: Void's rpi4-base package enables sshd, dhcpcd and
 # ntpd on the ARM side, so the asymmetry came from a dependency rather than from
@@ -119,7 +136,7 @@ ln -sf /etc/sv/udevd .
 # home LAN and is NOT fine anywhere else; anyone putting one of these on a
 # network they do not control should change it first. Stated here because a
 # default that ships open should say so out loud.
-ln -sf /etc/sv/sshd  .
+enable_sv sshd
 # ⚠ A getty on the serial line, or the console is write-only. Void's six agettys
 # are all on VGA tty1-6. On the Pi the serial line is ttyAMA0, not ttyS0.
 [ -d /etc/sv/agetty-ttyS0 ]  && ln -sf /etc/sv/agetty-ttyS0  . || true
@@ -139,10 +156,7 @@ if [ "$TIER" = desktop ]; then
     # enabled — and anything that must be OFF has to be turned off explicitly.
     rm -f /etc/runit/runsvdir/default/dhcpcd \
           /etc/runit/runsvdir/default/dhcpcd-eth0
-    ln -sf /etc/sv/elogind        .
-    ln -sf /etc/sv/polkitd        .
-    ln -sf /etc/sv/NetworkManager .
-    ln -sf /etc/sv/lightdm        .
+    enable_sv elogind polkitd NetworkManager lightdm
     # ⛔ INSTALLING avahi IS NOT ENABLING IT. The package was added and the
     # service left off, so the machine still announced nothing and ember.local
     # still did not resolve — the same shape as the udisks2 gap above.
@@ -153,7 +167,7 @@ if [ "$TIER" = desktop ]; then
     # last command becomes the exit status under set -e — the image build
     # reported FAILURE after completing successfully.
 else
-    ln -sf /etc/sv/dhcpcd .
+    enable_sv dhcpcd
 fi
 # ⚠ nss-mdns DOES NOTHING UNTIL nsswitch.conf ASKS FOR IT. The library being
 # installed is not the same as glibc consulting it, so .local lookups keep going
