@@ -11,7 +11,7 @@ Wine. **x86_64 is deliberately not a target.**
 | **Targets** | `i686` (Pentium 4 and later 32-bit x86), `aarch64` (Raspberry Pi 4 / 5) |
 | **Base** | Void Linux — glibc, runit, rolling |
 | **Desktop** | XFCE, or an IceWM tier for ~1 GB machines |
-| **Status** | i686 **boots on real hardware**; the Pi image is not built yet |
+| **Status** | i686 and aarch64 both **run on real hardware** — see [Verified](#verified-on-real-hardware) |
 
 Not a distribution from scratch: a package set, a desktop configuration, an
 image builder and an installer, on top of a base that already does the hard
@@ -57,9 +57,35 @@ Mesa 26.1.8 by reading the symbols out of `libgallium`, not assumed. The
 proprietary route is closed: 304.xx was the last branch to support GeForce 6/7
 and does not build against a 6.x kernel.
 
-⚠ The `nouveau.agpmode=` advice every forum gives **no longer exists**; AGP
-self-configures now. The real fallback is `nouveau.noaccel=1`. See
+**AGP works, and it matters.** On a VIA VT3314 (P4M800CE) the card negotiates
+AGP 3.5 at **8x with a 512 MiB GART**, which is what the desktop and every game
+run on. The chipset backend has to be in the initramfs for that — without
+`via-agp` nouveau reports `pci: failed to acquire agp` and falls back to PCI DMA
+with a **128 MiB** GART. That is not merely slower: on a 2 GB machine the
+shortfall lands in system RAM and the OOM killer eventually takes Xorg, which
+presents as a hard freeze with a still-moving mouse cursor.
+
+⚠ The `nouveau.agpmode=` advice every forum gives **no longer exists** — the
+kernel answers `unknown parameter 'agpmode' ignored`. AGP self-configures.
+`blacklist via_agp` is also not enough to disable it, because the initramfs
+modprobes it directly; that needs `install via_agp /bin/true`. The real
+acceleration fallback is `nouveau.noaccel=1`. See
 [docs/target-p4.md](docs/target-p4.md).
+
+⚠ `nouveau ... DMA_VTX_PROTECTION / PROTECTION_FAULT` is logged at **every** GL
+context creation, including by `glxgears`, and is benign — the driver recovers
+and renders at full speed. It is not an AGP fault and not worth chasing.
+
+### Verified on real hardware
+
+| | |
+|---|---|
+| **P4 / GeForce 7600 GS AGP** | hardware GL — `Accelerated: yes`, `NV4B`, 502 MB, `glxgears` 60 FPS vsync-locked |
+| **AGP** | AGP 3.5 @ 8x, GART 512 MiB, VIA VT3314 |
+| **Native 3D** | SuperTuxKart |
+| **Wine on hardware GL** | Return to Castle Wolfenstein (`GL_RENDERER: NV4B`), Quake II, Unreal Tournament 99 |
+| **Dual boot** | installs beside Windows XP; the NTFS partition mounts read-only for its game library |
+| **Raspberry Pi 4** | image boots to XFCE, ethernet + wifi, and drives a 4" 480x800 panel that publishes no EDID |
 
 Unsure what your machine can take? `tools/hw-probe.sh` is POSIX sh with no
 dependencies, so it runs from any live USB and reports the things that decide
@@ -112,6 +138,32 @@ Beyond RetroArch: **`dosbox-staging`**, **`scummvm`**, **`mednafen`**, and
 **Wine** with `winetricks`. Reach for the right one — Wine cannot run a DOS
 binary at all, and ScummVM reads original LucasArts/Sierra data files without
 needing either.
+
+#### Two traps with DirectDraw-era Windows games
+
+Both cost hours on Unreal Tournament 99 and apply to anything of that vintage.
+
+**Wine enumerates no DirectDraw drivers.** A 1999 game that asks DirectDraw to
+list display modes gets an empty list and aborts in its window-creation code —
+UT99 dies in `UWindowsClient::UWindowsClient` before writing a single line of
+its own log, which reads like a broken installation. Many such games have a
+switch for it; UT99's is one line:
+
+```ini
+[WinDrv.WindowsClient]
+UseDirectDraw=False
+```
+
+**A crash marker can lock a game out permanently.** UT99 writes an empty
+`System/Running.ini` at startup and deletes it on a clean exit. Crash once and
+it survives, and every later launch opens a modal "Recovery Mode" window — which
+under Wine never even paints, so it looks like a hang rather than a prompt.
+Deleting the marker before launch means one crash cannot trap the install.
+
+⚠ Debugging these over ssh is its own trap: `pkill -x UnrealTournament.exe`
+never matches, because Linux truncates a process name to 15 characters
+(`UnrealTournamen`). A "killed" instance survives and later tests read its stale
+windows.
 
 ### Disc images, from the file manager
 
@@ -293,9 +345,11 @@ cat /sys/class/drm/card1-HDMI-A-1/modes   # exactly one line = the EDID loaded
 
 ## Not done yet
 
-- **The Raspberry Pi image.** Not a BIOS disk image but a FAT firmware partition
-  plus `config.txt`, and it needs qemu-user-static for the ARM chroot. The
-  package sets are already validated for aarch64.
+- **Unreal Tournament's native Linux build** segfaults inside Mesa's `nv30`
+  driver during `SDL_GL_CreateContext`, upstream of every UT setting, so no
+  configuration avoids it. The Windows build under Wine is unaffected and is
+  what the reference machine runs. Only Mesa 26.1.8 is packaged, so there is no
+  older driver to fall back to.
 - **Extreme Tux Racer** is not packaged by Void for any architecture; it would
   need an xbps-src template.
 
