@@ -83,9 +83,36 @@ grub)
     # still shows everything; ttyS0 mirrors it. On hardware of this era that is
     # a debugging lifeline, and it is what makes the image testable in qemu with
     # no display at all.
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200"/' /etc/default/grub
+    # ⚠ nouveau.vram_pushbuf=1 — DMA push buffers in VRAM, not GART.
+    #
+    # The AGP work above buys bandwidth; this is what makes it survivable. By
+    # default nouveau puts its command push buffers in GART — system RAM reached
+    # across the AGP bridge — so every GPU command crosses the flakiest part of
+    # a board of this era. On the reference machine that wedged Xorg's own
+    # channel within about 107 seconds of boot:
+    #
+    #     nouveau: Xorg[657]: reloc wait_idle failed: -16      (-EBUSY)
+    #     nouveau: gr: [ERROR] DMA_VTX_PROTECTION / PROTECTION_FAULT
+    #
+    # and the desktop froze with the mouse still moving, because the hardware
+    # cursor keeps drawing while the server is blocked in the kernel. It struck
+    # during MENUS and file browsing rather than in games, which is the tell:
+    # gameplay is 3D and it is the 2D path glamor drives through GL. With the
+    # push buffers in VRAM the same session logged zero faults.
+    #
+    # ⚠ NOT a substitute for the AGP backends above and not the other way round:
+    # without via-agp the GART is 128 MiB and the shortfall lands in system RAM
+    # until the OOM killer takes Xorg; without this the AGP path is fast and
+    # wedges. Both, or neither works.
+    #
+    # Costs a few MB of VRAM. Remove it on a card too small to spare that — the
+    # driver's own default is auto.
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200 nouveau.vram_pushbuf=1"/' /etc/default/grub
     grep -q '^GRUB_TERMINAL' /etc/default/grub || echo 'GRUB_TERMINAL_OUTPUT="console serial"' >> /etc/default/grub
     echo 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0"' >> /etc/default/grub
+
+    grep -q "nouveau.vram_pushbuf=1" /etc/default/grub || {
+        echo "chroot: vram_pushbuf missing from the kernel cmdline" >&2; exit 1; }
 
     grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
     grub-mkconfig -o /boot/grub/grub.cfg

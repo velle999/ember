@@ -73,8 +73,29 @@ acceleration fallback is `nouveau.noaccel=1`. See
 [docs/target-p4.md](docs/target-p4.md).
 
 ⚠ `nouveau ... DMA_VTX_PROTECTION / PROTECTION_FAULT` is logged at **every** GL
-context creation, including by `glxgears`, and is benign — the driver recovers
-and renders at full speed. It is not an AGP fault and not worth chasing.
+context creation, including by `glxgears`, and is benign on its own — the
+driver recovers and renders at full speed. What is NOT benign is the same fault
+arriving against **Xorg's** channel under 2D load.
+
+⛔ **`nouveau.vram_pushbuf=1` is required, and it is the other half of the AGP
+work.** By default nouveau puts its DMA push buffers in GART — system RAM
+reached across the AGP bridge — so every GPU command crosses the least reliable
+part of a board of this era. On the reference machine that wedged Xorg's own
+channel within ~107 seconds of boot:
+
+```
+nouveau: Xorg[657]: reloc wait_idle failed: -16     (-EBUSY)
+```
+
+and the desktop froze with the mouse still moving, because the hardware cursor
+keeps drawing while the server is blocked in the kernel. It struck during
+**menus and file browsing, not games** — the tell, because gameplay is 3D and
+this is the 2D path glamor drives through GL. With push buffers in VRAM the
+same session logged zero faults.
+
+The two settings are not alternatives. Without `via-agp` the GART is 128 MiB
+and the shortfall lands in system RAM until the OOM killer takes Xorg; without
+`vram_pushbuf` the AGP path is fast and wedges. Both, or neither works.
 
 ### Verified on real hardware
 
