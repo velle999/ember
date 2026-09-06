@@ -439,6 +439,10 @@ clang++: error: invalid linker name in argument '-fuse-ld=lld'
 program"*, which reads like a broken compiler. It is a missing linker. Install
 `lld21` — match the clang version, not the meta package.
 
+✅ **Done on the reference Pi (2026-09-06):** `lld21-21.1.7_1`, one package, no
+dependency churn — it matches the installed `clang21`/`llvm21` exactly.
+`ld.lld --version` reports *LLD 21.1.7 (compatible with GNU linkers)*.
+
 ⛔ **`X86_DEV_ROOTFS` defaults to `/`, which here is aarch64.** FEX passes it
 to the guest build as `--sysroot`, so the cross-compile has no x86_64 headers,
 no `crt1.o` and no `libc.so` to link against.
@@ -449,11 +453,35 @@ rootfs: 1.9 GB extracted, and `/usr/include` holds exactly three entries
 `libc.so`, no `GL/gl.h`. Pointing `X86_DEV_ROOTFS` at it looks reasonable and
 fails the same way.
 
-What it would actually take: unpack Ubuntu 24.04 **amd64** `-dev` debs
-(`libc6-dev`, `linux-libc-dev`, `libx11-dev`, `libgl-dev`, …) into a sysroot
-directory and build with `-DX86_DEV_ROOTFS=<that>`. Untried. Weigh it against
-the section above first — thunks buy hardware GL, and the client is short of
-usable for reasons that are not only GL.
+With `lld` installed this is now the live blocker, and it is exactly what an
+x86_64 link asks for on a machine that has no x86_64 anything:
+
+```
+ld.lld: error: cannot open crtbeginS.o: No such file or directory
+ld.lld: error: unable to find library -lgcc
+ld.lld: error: cannot open crtendS.o: No such file or directory
+```
+
+⚠ **A `-shared` link fails the same way as an executable**, so the placeholder
+libs are not a way around it either.
+
+**What it would take, scoped.** `ThunkLibs/` has 15 guest libraries, and they
+include real system headers — `GL/gl.h`, `GL/glx.h`, `EGL/egl.h`, `SDL2/SDL.h`,
+`X11/xshmfence.h`, `alsa/asoundlib.h`, plus libc. So the sysroot is not just a
+libc: roughly `libc6-dev`, `linux-libc-dev`, `libgcc-*-dev`, `libx11-dev`,
+`libxext-dev`, `libxshmfence-dev`, `mesa-common-dev`, `libgl-dev`, `libegl-dev`,
+`libsdl2-dev`, `libasound2-dev`, `libdrm-dev`, `libvulkan-dev`, `libwayland-dev`
+and their dependencies — unpacked with `ar x` + `tar` into a directory and
+passed as `-DX86_DEV_ROOTFS=`.
+
+⚠ The Pi reaches `archive.ubuntu.com` fine, and has `ar`, `tar` and `curl` —
+but **not `xz` or `zstd`**, which is what modern `.deb` payloads are compressed
+with. Two more packages before any of this starts.
+
+⛔ **And then it is the full build again**, not a resume: `BuildThunks` has 349
+of ~7900 targets done and changing the toolchain invalidates most of that. Call
+it 8½ hours for a payoff the section above already describes as short of usable
+for reasons that are not only GL. Untried, and deliberately so.
 
 ⛔ **Void ships no `erofsfuse`**, so FEXServer cannot mount the `.ero` rootfs and
 dies with a bare `terminate called without an active exception`. Extract it
