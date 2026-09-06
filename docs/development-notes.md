@@ -167,74 +167,72 @@ At `loglevel=4` netconsole carried the `Killed process` line but **not** the
 `Mem-Info` dump naming the exhausted zone, which is the difference between a
 diagnosis and an inference.
 
-### ⛔ FOUND IT: TTM allocates with GFP_DMA32, and this kernel has no ZONE_DMA32
+### It is nouveau's nv4x GL, and nothing tunable fixes it (2026-09-06)
 
-With `kernel.printk=7` in place, netconsole finally carried the OOM's own stack
-instead of just the `Killed process` line, and it names the mechanism outright:
+The desktop wedges under **any sustained GL load**, and every candidate cause has
+now been eliminated by measurement rather than reasoning. Reproducer is
+`/usr/local/sbin/wedge-test` on the box; it verdicts on Xorg's process **state**,
+because the failure is Xorg blocking forever rather than anything a benchmark
+number would show.
+
+**The failure.** A GL client faults the graphics engine
+(`gr: intr … DMA_VTX_PROTECTION / PROTECTION_FAULT`), the FIFO fills with
+`CACHE_ERROR`, the channel reports `DMA_PUSHER … INVALID_CMD`, the engine stops
+retiring fences, and Xorg's next pushbuf blocks forever in
+`nouveau_fence_wait_legacy` — process state **`D`**, uninterruptible. The mouse
+keeps moving because the cursor is drawn by the GPU. Every 15 s the retry logs
+`reloc wait_idle failed: -16`. It sometimes escalates to an OOM kill, and twice
+it took the whole machine down hard enough to need a power cycle.
+
+**What was ruled out, each with a soak rather than one pass:**
+
+| suspect | test | result |
+|---|---|---|
+| lowmem / TTM | capped `ttm.pages_limit` etc. to 256 MiB | **still wedges**, 729 MiB lowmem free |
+| AGP transport | `install via_agp /bin/true`, GART 128 MiB | **still wedges**, 747 MiB free |
+| submission rate | `/etc/drirc` `vblank_mode=3`, verified 60.02 FPS | **still wedges** |
+| XFCE compositor | already `use_compositing: false` | not a factor |
+| 2D / glamor | 90 s window churn, no GL client | clean, **0** errors |
+| `AccelMethod "none"` | — | ⛔ `Accelerated: no`, llvmpipe. Not acceptable |
+
+⛔ **The OOM is downstream, not the cause.** The netconsole trace shows the
+allocation failing inside `ttm_bo_evict → nouveau_ttm_tt_populate →
+__ttm_pool_alloc` with `gfp_mask=GFP_USER|GFP_DMA32`, and on i686 there is no
+ZONE_DMA32, so those pages can only come from the 838 MiB lowmem zone. That is a
+real second-order problem — TTM's own `dma32_pages_limit` defaults to 214381
+pages, **exactly the whole lowmem zone**, so its brake can never engage before
+the zone is gone. But capping it does not stop the wedge, so it is a consequence
+of the GPU dying, not the reason.
+
+⚠ **Two conclusions in this file were reached from single runs and were wrong** —
+"AGP off fixes it" (8 errors in a short run, 498 and a wedge in a full one) and
+"throttled GL survives" (fine for 90 s, wedged on the next soak). On hardware
+this marginal, one clean pass means nothing. Soak it.
+
+**So the open question at the top of `target-p4.md` has an answer: `nv30`/nv4x is
+NOT stable on this board.** 2D is fine; the desktop is usable; GL is what breaks
+it, and there is nothing left to turn off.
+
+### ⛔ Do not buy an HD 2600 Pro AGP — `r600` is gone from this Mesa
+
+Checked the way `nv30` was checked, by reading the driver list out of
+`libgallium-26.1.8.so` rather than trusting a file's presence:
 
 ```
-Xorg invoked oom-killer: gfp_mask=0x100cc4(GFP_USER|GFP_DMA32), order=0
-  __ttm_pool_alloc [ttm] <- ttm_pool_alloc <- nouveau_ttm_tt_populate [nouveau]
-  <- ttm_tt_populate <- ttm_bo_populate <- ttm_bo_handle_move_mem <- ttm_bo_evict
+crocus i915 iris llvmpipe nouveau r300 radeonsi softpipe virtio_gpu
 ```
 
-⛔ **`GFP_DMA32` on i686 can only be served from ZONE_NORMAL.** There is no
-ZONE_DMA32 on a 32-bit kernel, so every page TTM populates for a buffer object
-comes out of the 838 MiB lowmem zone and **never** out of the 870 MiB of free
-highmem sitting next to it. `ttm_bo_evict` in the trace is TTM moving a buffer
-out of VRAM into system memory and populating pages for it — the eviction path
-is the one that exhausts the zone.
+**`r600` is absent.** Mesa has retired R600/R700/Evergreen to Amber, so an
+HD 2600 (RV630) would fall to **llvmpipe** — strictly worse than the card that is
+in the machine. `radeon.ko` still exists in the kernel and the RV630 firmware is
+not installed either (`linux-firmware-amd`), but that is moot.
 
-⚠ **And TTM's own ceiling is computed from the wrong number.** `ttm.pages_limit`
-defaults to a fraction of `totalram_pages()`, which here counts highmem — about
-2 GB of RAM, so a limit near 1 GB of pages. Those pages can only come from
-838 MiB of lowmem, so **TTM cannot reach its own limit before it exhausts the
-zone.** It never applies the brake, because by its arithmetic there is plenty
-left.
-
-**That is one fault, not two.** The channel wedge is downstream: two seconds
-before the OOM above,
-
-```
-nouveau: fifo: DMA_PUSHER - ch 1 [Xorg[669]] ... (err: INVALID_CMD)
-```
-
-Allocation failures leave nouveau unable to populate buffers, submission goes
-bad (`DMA_PUSHER`, then the `CACHE_ERROR` storm), the engine stops retiring
-fences, and Xorg blocks forever in `nouveau_fence_wait_legacy`. Whichever
-arrives first is what you see: a frozen desktop with a moving cursor, or Xorg
-killed by the OOM killer. Both start here.
-
-⛔ It can take the whole machine with it. On 2026-09-06 the box stopped
-responding to ping part-way through printing the trace above and needed a power
-cycle — netconsole is the only reason any of it was recorded.
-
-**The fix to try first:** bound TTM below the size of lowmem, on the kernel
-command line —
-
-```
-ttm.pages_limit=65536        # 256 MiB, against 838 MiB of lowmem
-```
-
-`pages_limit` is writable at runtime too (`/sys/module/ttm/parameters/`), so it
-can be tested without a reboot. The point is to make TTM evict or refuse at a
-number that leaves the kernel room, instead of one derived from RAM it cannot
-use.
-
-⚠ This also retires the AGP theory properly. A smaller GART would have bounded
-the same thing by accident — it caps how much can be bound into GTT at once —
-which is why disabling AGP looked like it helped. The GART size is not the cause
-and capping TTM is the direct control.
-
-### What has not been tried
-
-`AccelMethod "none"` takes Xorg's 2D out of the GPU command stream entirely
-while leaving DRI3 for direct-rendering clients — it targets exactly the channel
-that wedges. ⚠ It must be checked against `glxinfo -B | grep Accelerated`
-immediately after, because the failure mode of getting this wrong is a silent
-drop to llvmpipe, which is the same symptom this file already warns about twice.
-Also untried: XFCE's compositor off, which is the other big consumer of the 2D
-path through glamor, and is already an open question above.
+⚠ **`r300` IS still present** — that covers AGP-era Radeon 9500–X1950. It is the
+only non-NVIDIA AGP path left with a real Gallium driver in this Mesa, and it is
+far more shaken-out code than nv4x. OpenGL 2.0 rather than 2.1, and slower
+silicon than a 7600 GS, so it would be a trade of capability for stability, not
+an upgrade. ⚠ `r300` is old enough to be an Amber candidate itself — check the
+libgallium list again before buying anything.
 
 ## Swap
 
