@@ -419,69 +419,107 @@ ninja -j2
   way, which makes it look configured when it is not — check
   `BUILD_THUNKS` in `Build/CMakeCache.txt`, not the presence of that file.
 
-### Thunks need two things Void aarch64 does not have (2026-09-06)
+### Building the thunks off-host: four things in the way (2026-09-06)
 
-Turning `-DBUILD_THUNKS=True` on is not the end of it. The guest half of a
-thunk is an **x86_64** shared library, so it is a cross-build, and the Pi has
-neither piece of a cross toolchain:
+Turning `-DBUILD_THUNKS=True` on is not the end of it. The guest half of every
+thunk is an **x86_64 (and i686) shared library**, so it is a cross-build, and
+the Pi is not a machine FEX expects to cross-build from. Four separate things
+had to be fixed, and each one only appears once the previous is out of the way.
 
-⛔ **`lld` is not installed, and the thunk build forces it.**
+⛔ **1. `lld` is not installed, and the thunk build forces it.**
 `Data/CMake/toolchain_x86_64.cmake` sets `-fuse-ld=lld` into all three linker
-flag variables the moment `ENABLE_CLANG_THUNKS` is on, and prints *"Force
-enabling LLD as well"* while doing it. Void splits the linker out of the LLVM
-meta package, so `clang21` is installed and `ld.lld` is not:
+flag variables the moment `ENABLE_CLANG_THUNKS` is on, printing *"Force enabling
+LLD as well"*. Void splits the linker out of the LLVM meta package, so `clang21`
+is installed and `ld.lld` is not:
 
 ```
 clang++: error: invalid linker name in argument '-fuse-ld=lld'
 ```
 
-⚠ The failure surfaces as CMake's *"is not able to compile a simple test
-program"*, which reads like a broken compiler. It is a missing linker. Install
-`lld21` — match the clang version, not the meta package.
+⚠ It surfaces as CMake's *"is not able to compile a simple test program"*, which
+reads like a broken compiler. Install `lld21` — match the clang version, not the
+meta package. One package, no dependency churn.
 
-✅ **Done on the reference Pi (2026-09-06):** `lld21-21.1.7_1`, one package, no
-dependency churn — it matches the installed `clang21`/`llvm21` exactly.
-`ld.lld --version` reports *LLD 21.1.7 (compatible with GNU linkers)*.
+⛔ **2. There is no x86 sysroot, and the FEX RootFS is not one.**
+`Ubuntu_24_04` is a *runtime* rootfs: 1.9 GB extracted, and `/usr/include` holds
+three entries (`X11`, `gnumake.h`, `renderdoc_app.h`). No `stdio.h`, no
+`crt1.o`, no `libc.so`. Pointing `X86_DEV_ROOTFS` at it looks reasonable and
+fails identically to pointing it at `/`.
 
-⛔ **`X86_DEV_ROOTFS` defaults to `/`, which here is aarch64.** FEX passes it
-to the guest build as `--sysroot`, so the cross-compile has no x86_64 headers,
-no `crt1.o` and no `libc.so` to link against.
+`tools/mk-x86-sysroot.py` builds a real one out of Ubuntu debs — index, resolve,
+unpack, no `apt` and no chroot. **Both architectures**, because FEX adds
+`guest-libs` *and* `guest-libs-32` unconditionally; a 64-bit-only sysroot fails
+at the 32-bit ExternalProject after everything else has already built. ~200
+packages per architecture. What it had to get right:
 
-⚠ **The FEX RootFS cannot be used for this.** `Ubuntu_24_04` is a *runtime*
-rootfs: 1.9 GB extracted, and `/usr/include` holds exactly three entries
-(`X11`, `gnumake.h`, `renderdoc_app.h`). No `stdio.h`, no `crt1.o`, no
-`libc.so`, no `GL/gl.h`. Pointing `X86_DEV_ROOTFS` at it looks reasonable and
-fails the same way.
+- ⛔ **Absolute symlinks.** A deb ships
+  `libGL.so -> /usr/lib/x86_64-linux-gnu/libGL.so.1` as an *absolute* link.
+  Unpacked into a sysroot that resolves against the **host** root, where the
+  path is either missing or is the aarch64 library.
+- ⛔ **usrmerge.** `libc.so` is a linker *script* naming
+  `/lib/x86_64-linux-gnu/libc.so.6`, and `/lib -> usr/lib` comes from
+  `base-files`, which a sysroot has no reason to install. Without it lld reports
+  a missing libc that is sitting right there.
+- ⛔ **Python's `tar` filter rejects a deb with an absolute symlink** —
+  `OutsideDestinationError` naming a path that is not outside anything. The fix
+  is not `filter=None`, which drops the traversal check on debs fetched over
+  plain http; rewrite the link target relative and hand it to the real filter.
+- ⚠ `ar` **will not read an archive from stdin.** `ar t -` exits 9 saying
+  nothing useful.
+- ⚠ `xz` and `zstd` are not installed on Void by default, and are what modern
+  `.deb` payloads are compressed with.
 
-With `lld` installed this is now the live blocker, and it is exactly what an
-x86_64 link asks for on a machine that has no x86_64 anything:
+⛔ **3. `X86_DEV_ROOTFS` never reaches the compiler.**
+`ThunkLibs/GuestLibs/CMakeLists.txt` passes it to **thunkgen** as `--sysroot` so
+the generator can parse x86 headers. Nothing puts it on the compile or link
+line. That is fine upstream, where the host is x86_64 or a multiarch Debian with
+real cross libs at `/` — and invisible here until the guest sub-build's own
+compiler test fails. `tools/fex-thunks-crossbuild.patch` sets `CMAKE_SYSROOT` in
+both toolchain files, which is the variable that reaches every command.
+
+⛔ **4. And then CMake runs the sysroot's binaries on the host.**
+With `CMAKE_SYSROOT` set and nothing else, `find_package(PkgConfig)` locates
+`<sysroot>/usr/bin/pkg-config` — an x86_64 ELF — and executes it on aarch64:
 
 ```
-ld.lld: error: cannot open crtbeginS.o: No such file or directory
-ld.lld: error: unable to find library -lgcc
-ld.lld: error: cannot open crtendS.o: No such file or directory
+<sysroot>/usr/bin/pkg-config: 1: Syntax error: "(" unexpected
+CMake Error: Could NOT find PkgConfig (missing: PKG_CONFIG_EXECUTABLE)
 ```
 
-⚠ **A `-shared` link fails the same way as an executable**, so the placeholder
-libs are not a way around it either.
+⚠ Reported as a *missing package*, which sends you installing pkg-config that is
+already there. Headers and libraries must come from the sysroot; **tools must
+not** — `CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER`, the rest `ONLY`. And then the
+host pkg-config needs `PKG_CONFIG_LIBDIR`/`PKG_CONFIG_SYSROOT_DIR` pointed at
+the sysroot's 72 `.pc` files, or it answers with aarch64 paths that link
+nothing. Both are in the same patch.
 
-**What it would take, scoped.** `ThunkLibs/` has 15 guest libraries, and they
-include real system headers — `GL/gl.h`, `GL/glx.h`, `EGL/egl.h`, `SDL2/SDL.h`,
-`X11/xshmfence.h`, `alsa/asoundlib.h`, plus libc. So the sysroot is not just a
-libc: roughly `libc6-dev`, `linux-libc-dev`, `libgcc-*-dev`, `libx11-dev`,
-`libxext-dev`, `libxshmfence-dev`, `mesa-common-dev`, `libgl-dev`, `libegl-dev`,
-`libsdl2-dev`, `libasound2-dev`, `libdrm-dev`, `libvulkan-dev`, `libwayland-dev`
-and their dependencies — unpacked with `ar x` + `tar` into a directory and
-passed as `-DX86_DEV_ROOTFS=`.
+**The recipe, once all four are in:**
 
-⚠ The Pi reaches `archive.ubuntu.com` fine, and has `ar`, `tar` and `curl` —
-but **not `xz` or `zstd`**, which is what modern `.deb` payloads are compressed
-with. Two more packages before any of this starts.
+```sh
+sudo xbps-install -y lld21 xz zstd
+tools/mk-x86-sysroot.py ~/x86_64-sysroot          # ~400 debs, both arches
+patch -d ~/FEX -p1 < tools/fex-thunks-crossbuild.patch
+cd ~/FEX/BuildThunks
+cmake -DBUILD_THUNKS=True -DX86_DEV_ROOTFS=$HOME/x86_64-sysroot .
+ninja -j2
+```
 
-⛔ **And then it is the full build again**, not a resume: `BuildThunks` has 349
-of ~7900 targets done and changing the toolchain invalidates most of that. Call
-it 8½ hours for a payoff the section above already describes as short of usable
-for reasons that are not only GL. Untried, and deliberately so.
+⚠ **Verify the cross-toolchain before starting an 8-hour build**, because every
+failure above appears *after* the host half has built:
+
+```sh
+clang -target x86_64-linux-gnu --sysroot=$S -fuse-ld=lld t.c -lGL -lX11 -o t
+clang -target i686-linux-gnu   --sysroot=$S -fuse-ld=lld t.c -lGL -lX11 -o t
+```
+
+`readelf -h` should say `ELF64 … X86-64` and `ELF32 … Intel 80386`.
+
+⚠ **There is no `tmux` or `screen` on the Pi**, so a build started from a
+terminal dies with the terminal — that is what stopped the first attempt at 349
+targets. `setsid nohup ninja -j2 </dev/null >log 2>&1 &`.
+
+⚠ Whether thunks make Steam *usable* on a Pi 4 rather than merely accelerated is
+still untested — see the RAM and ARMv8.0 arithmetic above.
 
 ⛔ **Void ships no `erofsfuse`**, so FEXServer cannot mount the `.ero` rootfs and
 dies with a bare `terminate called without an active exception`. Extract it

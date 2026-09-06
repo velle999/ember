@@ -1,0 +1,80 @@
+--- a/Data/CMake/toolchain_x86_64.cmake
++++ b/Data/CMake/toolchain_x86_64.cmake
+@@ -1,3 +1,37 @@
++# ⛔ FEX USES X86_DEV_ROOTFS FOR THE THUNK GENERATOR ONLY, NOT THE COMPILER.
++# ThunkLibs/GuestLibs/CMakeLists.txt passes it to thunkgen as --sysroot so the
++# generator can parse x86 headers; nothing puts it on the compile or link line.
++# Fine upstream, where the host is x86_64 or a multiarch Debian with real cross
++# libs at /. On an aarch64 Void box there is no x86_64 anything at /, and
++# CMake's own compiler test fails before any of FEX is built.
++if (NOT DEFINED X86_DEV_ROOTFS)
++  set(X86_DEV_ROOTFS "$ENV{X86_DEV_ROOTFS}")
++endif()
++
++if (X86_DEV_ROOTFS AND NOT X86_DEV_ROOTFS STREQUAL "/")
++  # Reaches every compile AND link command, unlike a flags variable.
++  set(CMAKE_SYSROOT "${X86_DEV_ROOTFS}")
++  set(CMAKE_FIND_ROOT_PATH "${X86_DEV_ROOTFS}")
++
++  # ⛔ PROGRAM **NEVER**, OR CMAKE RUNS THE SYSROOT'S BINARIES ON THE HOST.
++  # With only CMAKE_SYSROOT set, find_package(PkgConfig) locates
++  # <sysroot>/usr/bin/pkg-config — an x86_64 ELF — and executes it on aarch64.
++  # The shell tries to read it as a script and CMake reports the result as
++  # "Could NOT find PkgConfig", which sends you looking for a missing package:
++  #     <sysroot>/usr/bin/pkg-config: 1: Syntax error: "(" unexpected
++  # Headers and libraries must come from the sysroot; tools must not.
++  set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
++  set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
++  set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
++  set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
++
++  # ⚠ The HOST pkg-config is then used against the SYSROOT's .pc files, or it
++  # answers with aarch64 paths that link nothing.
++  set(ENV{PKG_CONFIG_SYSROOT_DIR} "${X86_DEV_ROOTFS}")
++  set(ENV{PKG_CONFIG_LIBDIR}
++      "${X86_DEV_ROOTFS}/usr/lib/x86_64-linux-gnu/pkgconfig:${X86_DEV_ROOTFS}/usr/share/pkgconfig")
++endif()
++
+ option(ENABLE_CLANG_THUNKS "Enable building thunks with clang" FALSE)
+ 
+ set(CMAKE_SYSTEM_PROCESSOR x86_64)
+--- a/Data/CMake/toolchain_x86_32.cmake
++++ b/Data/CMake/toolchain_x86_32.cmake
+@@ -1,3 +1,37 @@
++# ⛔ FEX USES X86_DEV_ROOTFS FOR THE THUNK GENERATOR ONLY, NOT THE COMPILER.
++# ThunkLibs/GuestLibs/CMakeLists.txt passes it to thunkgen as --sysroot so the
++# generator can parse x86 headers; nothing puts it on the compile or link line.
++# Fine upstream, where the host is x86_64 or a multiarch Debian with real cross
++# libs at /. On an aarch64 Void box there is no x86_64 anything at /, and
++# CMake's own compiler test fails before any of FEX is built.
++if (NOT DEFINED X86_DEV_ROOTFS)
++  set(X86_DEV_ROOTFS "$ENV{X86_DEV_ROOTFS}")
++endif()
++
++if (X86_DEV_ROOTFS AND NOT X86_DEV_ROOTFS STREQUAL "/")
++  # Reaches every compile AND link command, unlike a flags variable.
++  set(CMAKE_SYSROOT "${X86_DEV_ROOTFS}")
++  set(CMAKE_FIND_ROOT_PATH "${X86_DEV_ROOTFS}")
++
++  # ⛔ PROGRAM **NEVER**, OR CMAKE RUNS THE SYSROOT'S BINARIES ON THE HOST.
++  # With only CMAKE_SYSROOT set, find_package(PkgConfig) locates
++  # <sysroot>/usr/bin/pkg-config — an x86_64 ELF — and executes it on aarch64.
++  # The shell tries to read it as a script and CMake reports the result as
++  # "Could NOT find PkgConfig", which sends you looking for a missing package:
++  #     <sysroot>/usr/bin/pkg-config: 1: Syntax error: "(" unexpected
++  # Headers and libraries must come from the sysroot; tools must not.
++  set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
++  set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
++  set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
++  set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
++
++  # ⚠ The HOST pkg-config is then used against the SYSROOT's .pc files, or it
++  # answers with aarch64 paths that link nothing.
++  set(ENV{PKG_CONFIG_SYSROOT_DIR} "${X86_DEV_ROOTFS}")
++  set(ENV{PKG_CONFIG_LIBDIR}
++      "${X86_DEV_ROOTFS}/usr/lib/i386-linux-gnu/pkgconfig:${X86_DEV_ROOTFS}/usr/share/pkgconfig")
++endif()
++
+ option(ENABLE_CLANG_THUNKS "Enable building thunks with clang" FALSE)
+ 
+ set(CMAKE_SYSTEM_PROCESSOR i686)
