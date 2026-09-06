@@ -107,6 +107,8 @@ and the shortfall lands in system RAM until the OOM killer takes Xorg; without
 | **Wine on hardware GL** | Return to Castle Wolfenstein (`GL_RENDERER: NV4B`), Quake II, Unreal Tournament 99 |
 | **Dual boot** | installs beside Windows XP; the NTFS partition mounts read-only for its game library |
 | **Raspberry Pi 4** | image boots to XFCE, ethernet + wifi, and drives a 4" 480x800 panel that publishes no EDID |
+| **Steam on the Pi** | reaches its login screen under [FEX](#steam-on-the-raspberry-pi--this-one-works) — x86_64 emulated on ARM64, `steamwebhelper` and all |
+| **Stability** | the P4 runs a session without a GPU wedge or an OOM kill, which took `via-agp` + `nouveau.vram_pushbuf=1` + swap + the elogind fix below — see each for why none of them is optional |
 
 Unsure what your machine can take? `tools/hw-probe.sh` is POSIX sh with no
 dependencies, so it runs from any live USB and reports the things that decide
@@ -297,9 +299,48 @@ load-bearing, not cosmetic. The shim is kept only as a documented failure.
 `.deb`s are **bootstrappers, not clients**: an old launcher still downloads
 today's client, and Valve publishes no standalone archived clients.
 
-The one target where Steam is theoretically possible is **aarch64 via FEX**,
-which emulates x86_64 and would satisfy the check honestly. Untested here, and
-a Pi 4 would run the client rather than any game.
+### Steam on the Raspberry Pi — this one works
+
+**aarch64 under [FEX-Emu](https://github.com/FEX-Emu/FEX)** is the one target
+where Steam runs, because FEX emulates x86_64 and answers `Is64BitOS()`
+**honestly** rather than being lied to. On the reference Pi 4 the client reaches
+its login screen: `steamwebhelper` running, CEF rendering from
+`steamloopback.host`, `wmctrl` reporting `Sign in to Steam`.
+
+FEX ships **no prebuilt binaries** — it is a CMake + LLVM source build, about
+8½ hours on a Pi 4. What that build needs:
+
+```sh
+git clone --recurse-submodules --depth 1 --branch FEX-2608 \
+    https://github.com/FEX-Emu/FEX.git
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_LTO=False -DBUILD_TESTS=False -DBUILD_FEXCONFIG=False ..
+ninja -j2
+```
+
+- **`-DENABLE_LTO=False` and `-j2`.** Four `clang++` or an LTO link will not fit
+  in 1830 MB even with swap. With these it never touched swap at all.
+- **`-DBUILD_FEXCONFIG=False`** skips a Qt GUI config tool that is not needed to
+  run anything, and whose absence otherwise fails the configure.
+- **Leave `BUILD_STEAM_SUPPORT=FALSE` despite the name** — enabling it *removes*
+  `FEXRootFSFetcher`, which is how the x86_64 rootfs is obtained.
+- **Pin the tag.** FEX plans to require ARMv8.4-a, which drops *every* Raspberry
+  Pi including the Pi 5 (their issue #4120 lists "Raspberry Pi: Everything").
+  `FEX-2608` still supports ARMv8.0.
+
+⛔ **Void ships no `erofsfuse`**, so FEXServer cannot mount the `.ero` rootfs and
+dies with a bare `terminate called without an active exception`. Extract it
+instead — `fsck.erofs --extract=DIR --overwrite img.ero` — and point
+`~/.fex-emu/Config.json` at the directory. That avoids FUSE at runtime too.
+
+⚠ `FEXInterpreter` and `FEXLoader` no longer exist; the binary is `FEX`, and
+`FEXBash` is the convenient entry point. And `pgrep -x steam` finds nothing
+while Steam is running perfectly well — the processes are `steamwebhelper`.
+
+**Expectations:** 1358 MB RAM and 647 MB swap just sitting at the login screen,
+on an 1830 MB board. It is emulated Chromium on a Pi. Simple native titles are
+the realistic ceiling, which is FEX's own position — "some of this deprecated
+hardware can play lighter games".
 
 ### Disc images, from the file manager
 
@@ -479,7 +520,7 @@ To check it took, on the running Pi:
 cat /sys/class/drm/card1-HDMI-A-1/modes   # exactly one line = the EDID loaded
 ```
 
-### The elogind respawn loop
+## The elogind respawn loop
 
 ⛔ **lightdm must wait for elogind, not just dbus.** elogind has two owners —
 runit's service, and D-Bus activation via
@@ -505,7 +546,7 @@ elogind's own script uses to wait for dbus, and fails the build if it is not
 there afterwards. ⚠ That file belongs to Void's lightdm package, so an upgrade
 drops a `.pacnew` and reverts it on an installed machine.
 
-### Swap
+## Swap
 
 ⛔ **Ember's targets do not have enough RAM to run without it**, and both
 reference machines proved it doing ordinary things:
