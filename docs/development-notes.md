@@ -85,6 +85,73 @@ The two settings are not alternatives. Without `via-agp` the GART is 128 MiB
 and the shortfall lands in system RAM until the OOM killer takes Xorg; without
 `vram_pushbuf` the AGP path is fast and wedges. Both, or neither works.
 
+### ⚠ The OOM measurement does not fit that explanation (2026-09-06, unconfirmed)
+
+The netconsole capture has now caught the kill five times, and it does not look
+like a machine running out of memory:
+
+```
+nouveau …: gr: intr 00100000 [ERROR] … [BAD_ARGUMENT] ch 1 [… Xorg[16942]]   ×16
+Out of memory: Killed process 16942 (Xorg) total-vm:382360kB, anon-rss:19036kB
+```
+
+**Xorg is killed at ~380 MB of address space and ~90 MB resident, on a 2 GB
+machine.** Every one of the five is within 10 MB of that. wireplumber,
+pipewire, lightdm, Thunar, xfwm4, xfce4-panel, xfdesktop and tumblerd have all
+been taken in the same sweeps.
+
+⛔ **The scarce resource is LOWMEM, not memory.** This is a HIGHMEM i686
+kernel, and the split is brutal:
+
+```
+LowTotal   837.7 MiB     LowFree   197.0 MiB     <- everything the kernel has
+HighTotal 1160.9 MiB     HighFree  869.2 MiB     <- barely touched
+```
+
+Measured **sitting at the lightdm greeter with no session logged in.** Of the
+640 MiB of lowmem in use, slab + page tables + kernel stacks + vmalloc account
+for 52 MiB:
+
+```
+  lowmem in use         640.8 MiB
+  slab+pgt+stk+vmap      52.4 MiB
+  UNACCOUNTED           588.3 MiB   <- pinned by a driver
+```
+
+It is steady, not leaking (`LowFree` unchanged over 20 s at idle), and
+`buddyinfo` shows ZONE_NORMAL still holding order-9 and order-10 blocks, so it
+is consumption and not fragmentation. So the OOM killer fires on ZONE_NORMAL
+while ~870 MiB of highmem sits free, picks the largest RSS in the room, and
+that is Xorg — which is why it looks like a graphics fault and reads in the log
+as a memory problem that the free memory flatly contradicts.
+
+⚠ **Which allocation it is has NOT been established**, and the guess that fits
+the number is exactly the sort of thing this file exists to stop being repeated
+as fact. 588 MiB is suspiciously close to the 512 MiB GART, and nouveau is the
+only plausible consumer of that much pinned lowmem on this box — but an AGP
+aperture does not pin RAM by itself, pages are bound into it on demand, so the
+arithmetic matching is not proof.
+
+⚠ **If it is the GART, the paragraph above has the causation backwards** — a
+128 MiB GART would leave ~380 MiB more lowmem, and the fallback that section
+warns against would be the fix rather than the fault. Do not act on that until
+it is measured; both readings explain the same freeze.
+
+**What settles it**, neither of which is possible unprivileged:
+
+- `dmesg | grep -i agp` for the line naming the negotiated GART size, and
+  `/sys/kernel/debug/dri/0/` for what TTM has bound.
+- One boot with the aperture reduced (it is a BIOS setting) or with AGP off via
+  `install via_agp /bin/true`, then re-read `LowFree` at the greeter. A jump of
+  a few hundred MiB proves it; no change exonerates AGP entirely.
+
+⚠ `dmesg` is restricted to root here (`kernel.dmesg_restrict=1`) and there is
+no syslog daemon, so `/var/log/dmesg.log` — root-only, written once at boot —
+is the only on-disk kernel log. The netconsole stream is the only live one, and
+`loglevel=4` means it carries the `Killed process` line but **not** the
+`Mem-Info` dump that would have shown the per-zone breakdown at the moment of
+the kill. Raising the console loglevel is worth doing before the next attempt.
+
 
 ## Swap
 
