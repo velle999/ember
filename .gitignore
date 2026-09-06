@@ -6,3 +6,4 @@ cores/
 # Wi-Fi credentials — never committed.
 installer/wifi.nmconnection
 __pycache__/
+assets/

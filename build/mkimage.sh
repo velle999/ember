@@ -94,6 +94,7 @@ truncate -s "${size_mb}M" "$IMG"
 # A panel with no EDID needs one supplied (see EMBER_PI_MODE in config.sh).
 # It is generated on the host because installer/ is mounted read-only and the
 # build container is not guaranteed to have python3.
+mkdir -p assets cores/"$ARCH"   # docker would otherwise create these root-owned
 EDIDDIR="$(mktemp -d)"
 trap 'rm -rf "$EDIDDIR"' EXIT
 if [ "${EMBER_PI_MODE:-auto}" != auto ]; then
@@ -117,6 +118,7 @@ docker run --rm --privileged \
     -v "$PWD/installer:/installer:ro" \
     -v "$EDIDDIR:/edid:ro" \
     -v "$PWD/cores/$ARCH:/cores:ro" \
+    -v "$PWD/assets:/ra-assets:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
     -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" -e RPI_MODEL_N="$RPI_MODEL" \

@@ -255,6 +255,26 @@ if [ -d /cores ] && [ -n "$(ls -A /cores 2>/dev/null)" ]; then
     echo "inside: $(ls /mnt/usr/lib/libretro/*.so 2>/dev/null | wc -l) libretro cores installed"
 fi
 
+# ── RetroArch menu assets and joypad profiles ───────────────────────────────
+# ⛔ Void's retroarch package ships NEITHER, and the failure of each is silent
+# and misleading: with no assets the Ozone/XMB menus draw without icons or
+# fonts and look like a corrupt install, and with no joypad profiles every
+# controller is "not configured" and simply does nothing. RetroArch downloads
+# both from its Online Updater, which is the one thing this machine cannot do.
+if [ -d /ra-assets ] && [ -n "$(ls -A /ra-assets 2>/dev/null)" ]; then
+    mkdir -p /mnt/usr/share/libretro
+    cp -a /ra-assets/. /mnt/usr/share/libretro/
+    chown -R 0:0 /mnt/usr/share/libretro
+    # ⚠ The defaults point into ~/.config/retroarch, which is empty on a new
+    # user, so shipping the files is not enough — the config has to name them.
+    if [ -f /mnt/etc/retroarch.cfg ]; then
+        sed -i 's|^# *assets_directory =.*|assets_directory = "/usr/share/libretro/assets"|' /mnt/etc/retroarch.cfg
+        sed -i 's|^# *joypad_autoconfig_dir =.*|joypad_autoconfig_dir = "/usr/share/libretro/autoconfig"|' /mnt/etc/retroarch.cfg
+    fi
+    echo "inside: retroarch assets + $(find /mnt/usr/share/libretro/autoconfig -name '*.cfg' 2>/dev/null | wc -l) joypad profiles installed"
+fi
+
+
 mount --bind /dev  /mnt/dev
 mount --bind /proc /mnt/proc
 mount --bind /sys  /mnt/sys
