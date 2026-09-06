@@ -327,6 +327,21 @@ ninja -j2
 - **Pin the tag.** FEX plans to require ARMv8.4-a, which drops *every* Raspberry
   Pi including the Pi 5 (their issue #4120 lists "Raspberry Pi: Everything").
   `FEX-2608` still supports ARMv8.0.
+- ⛔ **`-DBUILD_THUNKS=True`, which the build above omits.** Without thunks
+  there is **no hardware GL under FEX at all**, and the failure is quiet — the
+  guest is x86_64, so it looks for an x86_64 `vc4_dri.so`, and Mesa's x86_64
+  build has no such thing because vc4 is an ARM GPU. Steam logs
+
+  ```
+  vc4: driver missing
+  glx: failed to create dri3 screen
+  failed to load driver: vc4
+  ```
+
+  and carries on without acceleration. Thunks are what forward guest GL calls
+  to the **host's** native `vc4_dri.so`. `ThunksDB.json` is installed either
+  way, which makes it look configured when it is not — check
+  `BUILD_THUNKS` in `Build/CMakeCache.txt`, not the presence of that file.
 
 ⛔ **Void ships no `erofsfuse`**, so FEXServer cannot mount the `.ero` rootfs and
 dies with a bare `terminate called without an active exception`. Extract it
@@ -339,8 +354,13 @@ while Steam is running perfectly well — the processes are `steamwebhelper`.
 
 ⛔ **It is not usable, and that is the honest summary.** It runs — the client
 starts, the UI renders, it reaches a login — and then it is too slow to
-actually use. Treat this as a demonstration that the emulation works, not as a
-way to play anything.
+actually use, and crashes when a game is installed. Treat this as a
+demonstration that the emulation works, not as a way to play anything.
+
+⚠ Part of that is self-inflicted and fixable: the build above was made
+**without thunks**, so there is no hardware GL and everything above is
+software-rendered under emulation. Whether thunks make it *usable* on a Pi 4
+rather than merely faster is untested.
 
 Why, concretely: 1358 MB RAM and 647 MB swap **just sitting at the login
 screen**, on an 1830 MB board, which is most of the machine gone before a game
