@@ -232,7 +232,29 @@ reports `Running Steam on void  32-bit`.
 Then `Is64BitOS()` in `steamui.so` reads `uname(2)` and asserts, because
 `utsname.machine` is `i686`.
 
-⛔ **Answering that check does not help — it makes things worse.**
+Inhibiting the updater does work, for what it is worth — `Steam.cfg` with
+`BootStrapperInhibitAll=enable` (plus the narrower `*UpdateOnLaunch`,
+`*ClientChecksum`, `*BootstrapperChecksum`, all verified present in
+`ubuntu12_32/steam`) stops the client being replaced on each launch. It does
+not help, because the client you already have is the one that cannot run.
+
+⛔ **Unshimmed, with updates inhibited, it still fails — in the UI.** The
+client starts, `steamwebhelper` spawns, and then:
+
+```
+src/common/html/chrome_ipc_client.cpp (305) : Is64BitOS()
+src/steamUI/steamuisharedjscontroller.cpp (549) : Failed creating offscreen shared JS context
+Connection failure: Timeout
+./steam.sh: line 1011: Killed
+```
+
+`Is64BitOS()` is checked in the **Chrome IPC** path too, so the CEF context the
+UI is built on never gets created. The client retries until the OOM killer
+takes it — on a 2 GB machine that takes the desktop session with it. Two
+independent code paths (`friendsuihelpers.cpp` and `chrome_ipc_client.cpp`)
+gate on the same thing, and there is no non-CEF UI left to fall back to.
+
+⛔ **Answering that check does not help either — it makes things worse.**
 `tools/steam64shim.c` is an `LD_PRELOAD` that rewrites `utsname.machine` to
 `x86_64`. It works, and Steam gets past the assert, and then tries to launch
 the things the check was gating:
