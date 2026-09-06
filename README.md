@@ -103,6 +103,7 @@ Needs docker (for xbps), and qemu to test. Building the **aarch64** image additi
 ```sh
 build/validate-profiles.sh        # every package name still exists, per arch
 build/fetch-cores.sh i686         # libretro cores (once; see below)
+build/fetch-assets.sh            # RetroArch menu assets + joypad profiles
 build/mkrootfs.sh i686 desktop    # 4.7 GB rootfs    (EMBER_WINE=0 saves ~790 MB)
 build/mkimage.sh  i686 desktop    # 6.2 GB bootable MBR/BIOS disk image
 sudo build/write-usb.sh           # write it to a stick, safely
@@ -131,6 +132,7 @@ Then:
 
 ```sh
 build/fetch-cores.sh aarch64        # 424 libretro cores
+build/fetch-assets.sh               # menu assets (shared with i686)
 build/mkrootfs.sh aarch64 desktop
 build/mkimage.sh  aarch64 desktop   # FAT firmware partition + ext4 root
 sudo build/write-usb.sh             # same guard rails, for the SD card
@@ -163,6 +165,21 @@ build/fetch-cores.sh i686        # 31 cores from libretro's buildbot → cores/i
 They install to `/usr/lib/libretro` with `retroarch.cfg` pointed at it, so
 RetroArch works offline out of the box. `cores/` is gitignored — those are
 downloaded binaries, not source.
+
+⛔ **Cores are not the only thing Void's `retroarch` omits.** The package ships
+nothing under `share/libretro`, and both gaps fail silently in ways that look
+like a broken install rather than a missing download:
+
+| missing | what you see |
+|---|---|
+| menu assets | Ozone/XMB draw with no icons and no fonts |
+| joypad profiles | every controller is "not configured" and does nothing |
+
+`build/fetch-assets.sh` bakes both in (~90 MB) and points `retroarch.cfg` at
+them. It is architecture-independent — PNGs, fonts and text profiles — so one
+download serves both targets. The 213 MB upstream assets repo is trimmed to the
+menu drivers usable on Linux; `src/` alone is 62 MB of build-time SVGs that
+nothing reads at runtime.
 
 ⚠ **Standalone MAME is deliberately not installed.** It is 555 MB and MAME 0.282
 chases accuracy on hardware two decades newer than a Pentium 4. Arcade is
