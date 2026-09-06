@@ -107,7 +107,7 @@ and the shortfall lands in system RAM until the OOM killer takes Xorg; without
 | **Wine on hardware GL** | Return to Castle Wolfenstein (`GL_RENDERER: NV4B`), Quake II, Unreal Tournament 99 |
 | **Dual boot** | installs beside Windows XP; the NTFS partition mounts read-only for its game library |
 | **Raspberry Pi 4** | image boots to XFCE, ethernet + wifi, and drives a 4" 480x800 panel that publishes no EDID |
-| **Steam on the Pi** | reaches its login screen under [FEX](#steam-on-the-raspberry-pi--this-one-works) — x86_64 emulated on ARM64, `steamwebhelper` and all |
+| **Steam on the Pi** | *runs* under [FEX](#steam-on-the-raspberry-pi--it-runs-and-it-is-not-usable) — x86_64 emulated on ARM64, `steamwebhelper` and all — but is **too slow to use**. A demonstration, not a feature |
 | **Stability** | the P4 runs a session without a GPU wedge or an OOM kill, which took `via-agp` + `nouveau.vram_pushbuf=1` + swap + the elogind fix below — see each for why none of them is optional |
 
 Unsure what your machine can take? `tools/hw-probe.sh` is POSIX sh with no
@@ -299,7 +299,7 @@ load-bearing, not cosmetic. The shim is kept only as a documented failure.
 `.deb`s are **bootstrappers, not clients**: an old launcher still downloads
 today's client, and Valve publishes no standalone archived clients.
 
-### Steam on the Raspberry Pi — this one works
+### Steam on the Raspberry Pi — it runs, and it is not usable
 
 **aarch64 under [FEX-Emu](https://github.com/FEX-Emu/FEX)** is the one target
 where Steam runs, because FEX emulates x86_64 and answers `Is64BitOS()`
@@ -337,10 +337,22 @@ instead — `fsck.erofs --extract=DIR --overwrite img.ero` — and point
 `FEXBash` is the convenient entry point. And `pgrep -x steam` finds nothing
 while Steam is running perfectly well — the processes are `steamwebhelper`.
 
-**Expectations:** 1358 MB RAM and 647 MB swap just sitting at the login screen,
-on an 1830 MB board. It is emulated Chromium on a Pi. Simple native titles are
-the realistic ceiling, which is FEX's own position — "some of this deprecated
-hardware can play lighter games".
+⛔ **It is not usable, and that is the honest summary.** It runs — the client
+starts, the UI renders, it reaches a login — and then it is too slow to
+actually use. Treat this as a demonstration that the emulation works, not as a
+way to play anything.
+
+Why, concretely: 1358 MB RAM and 647 MB swap **just sitting at the login
+screen**, on an 1830 MB board, which is most of the machine gone before a game
+is involved. The UI is emulated Chromium. And the Pi 4's Cortex-A72 is
+ARMv8.0-a, so FEX has none of the extensions that make x86 emulation cheap —
+FEAT_LSE atomics, FEAT_FLAGM flags, FEAT_LRCPC ordering. In FEX's own words,
+without them "x86 emulation is either slow (atomics) or buggy (TSO emulation
+disabled)".
+
+⚠ A Pi 5 does not rescue this. Its A76 is ARMv8.2-a — better, still short of
+the ARMv8.4-a FEX is moving to, and still on the list of hardware they intend
+to drop.
 
 ### Disc images, from the file manager
 
