@@ -920,3 +920,69 @@ buffer: sixteen relocations, all accounted for by other methods, none for `IDXBU
 **Sanity check any address you read.** Buffer objects are page aligned. An offset
 like `0x100` cannot be one, so it is an unrelocated value regardless of what else
 the dump seems to say.
+
+## The nv4x freeze: three bugs, not one
+
+The desktop froze under any sustained GL load. The engine stopped retiring fences
+and reported nothing at all — no fault, no interrupt, no error. Everything visible
+in the log arrived afterwards and was fallout.
+
+That last point cost the most time. `CACHE_ERROR`, `DMA_PUSHER … MEM_FAULT`,
+`CALL_SUBR_ACTIVE`, `INVALID_CMD`, and wild-looking `GET` pointers such as
+`ff003444` were all chased as causes. They are read from channels that are already
+dead. **The first line in the log is not the cause**, and on this hardware which
+line appears first varies from run to run.
+
+What finally separated them was a probe in `nouveau_fence_wait_legacy()` that, at
+the fence deadline, read the engine's own sequence number and compared it with the
+one being waited on, then dumped PGRAPH and FIFO state. That answered a question no
+amount of reading could: the work had genuinely not been done, so this was never a
+lost interrupt or a coherency problem.
+
+### 1. The cross-channel fence semaphore
+
+`nv17_fence_sync()` chains a shared GPU semaphore across two channels: the first
+acquires value+0 and releases value+1, the second acquires value+1 and releases
+value+2. `nouveau_bo_move_m2mf()` calls it on the driver's own move channel for
+every accelerated buffer eviction, so an acquire that is never satisfied wedges a
+kernel channel rather than an application one. That matches the captured state
+exactly — a channel with GET equal to PUT, PGRAPH idle, fences never advancing,
+while another channel ran normally next to it.
+
+`nouveau.fence_sema=0` makes it return `-ENODEV` like `nv10_fence_sync()` does, and
+the caller falls back to a CPU wait.
+
+⚠ A separate defect in the same function was found and fixed on the way: it advanced
+the global sequence counter before emitting anything, emitted each half only if its
+own `PUSH_WAIT` succeeded, and returned 0 regardless — so a failed reservation left
+the semaphore permanently behind the counter. Instrumenting it showed that path
+never executes here, so it explains nothing about this machine. It is still wrong
+and the patch stays.
+
+### 2. The out-of-memory kill
+
+Unrelated to the GPU, and it killed the machine while the above was being tested.
+TTM allocates with `GFP_DMA32`; a 32-bit kernel has no `ZONE_DMA32`, so the pages
+come out of the ~838 MB low-memory zone, and `ttm.dma32_pages_limit` defaults to
+about the size of that entire zone. The brake can never engage.
+`ttm.dma32_pages_limit=65536` caps it at 256 MB.
+
+Note that capping TTM does not stop anything else eating low memory. A browser will
+walk `LowFree` down on its own, and the resulting kill looks like a GPU failure
+until the log is read.
+
+### 3. The error-message storm
+
+`nv04_fifo_intr_cache_error()` handles one cache entry per interrupt and prints a
+line for each. Draining a full cache emits hundreds back to back; with netconsole
+each is a synchronous packet, and on a single-core machine that livelocks the box.
+The recovery underneath is what matters, so only the message is rate limited.
+
+### Things eliminated on evidence
+
+Worth not repeating: a pushbuf flush inside an open primitive (instrumented, never
+observed once, including during a stall), pushbuf space accounting (`BEGIN_NV04` and
+`BEGIN_NI04` reserve on their own), a context-program hang (the instruction pointer
+sits on `CP_END`, which means finished), `nouveau.vram_pushbuf`, and the FIFO runout
+interrupt, which does occur and is now acknowledged rather than silently masked off,
+but has not recurred since.

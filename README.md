@@ -188,12 +188,55 @@ which has no index buffer to relocate at all. Measured on the reference machine,
 protection fault is gone: stock faults on every single run, patched runs fifteen
 consecutive times clean.
 
-**That fixes the fault but not the freeze.** There is a second, unrelated fault in
-this driver, and it is the one that actually wedges the machine: under sustained 3D
-the engine simply stops retiring fences, with no error reported anywhere. It is not
-a consequence of the first problem — it still happens with indexed draws taken out
-of the picture entirely. The `CACHE_ERROR` messages that follow are the FIFO
-replaying a channel that is already dead, not the cause.
+**The freeze was a second, separate fault, and it is now understood.** Under load the
+engine stopped retiring fences with no error reported anywhere. It turned out to be
+three independent problems stacked on top of each other, each needing its own fix.
+
+### The cross-channel fence semaphore
+
+`nv17_fence_sync()` synchronises two channels by making one **acquire** a shared GPU
+semaphore that the other must **release**. `nouveau_bo_move_m2mf()` calls it on the
+driver's own buffer-move channel for every accelerated eviction, so an acquire that
+is never satisfied wedges a *kernel* channel — which is exactly what the freeze
+looked like: a channel with its command buffer fully fetched, the graphics engine
+idle, and its fences never signalling, while other channels ran normally beside it.
+
+Older cards never had this. `nv10_fence_sync()` simply returns `-ENODEV` and lets the
+caller wait on the CPU. `nouveau.fence_sema=0` makes the newer path behave the same
+way. It costs a little synchronisation latency and it stops the freeze.
+
+### The out-of-memory kill
+
+TTM asks for `GFP_DMA32` pages. A 32-bit kernel has no `ZONE_DMA32`, so those pages
+can only come from the low-memory zone — about 838 MB on this machine — and the
+default `ttm.dma32_pages_limit` is roughly the size of that whole zone, so the brake
+it exists to apply never engages. TTM allocates until the kernel starts killing
+processes. `ttm.dma32_pages_limit=65536` caps it at 256 MB so it backs off instead.
+This is not specific to this card; it applies to any 32-bit host running TTM.
+
+### The error-message storm
+
+The FIFO reports one line per cache entry when it drains after an error, unlimited.
+On a single-core machine that flood is enough to livelock the box on its own. See
+`patches/nouveau-nv04-fifo-ratelimit-error-storm.patch`.
+
+### Which cards this applies to
+
+The fence-semaphore path is shared by every chipset whose FIFO exposes
+`NV17_CHANNEL_DMA` or `NV40_CHANNEL_DMA`:
+
+    NV17 NV18 nForce2 NV20 NV25 NV28 NV2A NV30 NV31 NV34 NV35 NV36
+    NV40 NV41 NV42 NV43 NV44 NV44A NV45 G70 G71 G72 G73
+    C51 C61 C67 C68 C73
+
+In retail terms: GeForce4 MX and Ti, the GeForce FX series, GeForce 6, GeForce 7,
+and the nForce integrated parts. Cards older than that (NV04–NV15) use a different
+fence path that never had the problem.
+
+⚠ **Only one of those has actually been tested** — a GeForce 7600 GS, chipset
+0x4b/G73. The rest share the code, which is a reason to suspect they are affected,
+not evidence that they are. Anyone with one of the others is in a position to find
+out, and the switch is a module parameter rather than a rebuild.
 
 **`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
 it.** The engine still faults; the driver now notices a fence past its deadline,
