@@ -167,6 +167,22 @@ At `loglevel=4` netconsole carried the `Killed process` line but **not** the
 `Mem-Info` dump naming the exhausted zone, which is the difference between a
 diagnosis and an inference.
 
+### ⛔ THE HARDWARE IS PROVEN GOOD: THE SAME CARD IS STABLE UNDER WINDOWS XP
+
+**Read this before spending an hour on the GPU.** The P4 dual-boots XP on the
+same card, same cooler, same AGP slot, same PSU, and it is **stable there under
+sustained 3D**. That single fact eliminates, without any further testing:
+
+- the GPU silicon and its VRAM
+- **temperature** — and nouveau cannot even reclock nv40, so it very likely runs
+  the card *cooler* than XP's driver does
+- the AGP slot, the riser, the chipset, the power supply
+- "it is a twenty-year-old card that is dying"
+
+⚠ It was known and undocumented, and its absence cost a kernel bisect, a Mesa
+bisect and a thermal probe that were all asking whether the hardware was at
+fault. It is not. **The fault is in the Linux driver stack, and nowhere else.**
+
 ### It is nouveau's nv4x GL, and nothing tunable fixes it (2026-09-06)
 
 The desktop wedges under **any sustained GL load**, and every candidate cause has
@@ -212,6 +228,30 @@ this marginal, one clean pass means nothing. Soak it.
 **So the open question at the top of `target-p4.md` has an answer: `nv30`/nv4x is
 NOT stable on this board.** 2D is fine; the desktop is usable; GL is what breaks
 it, and there is nothing left to turn off.
+
+⛔ **And version-pinning does not rescue it either.** Measured as soaks-to-wedge
+from a fresh boot, verifying the loaded version each time:
+
+| kernel | Mesa | soaks survived |
+|---|---|---|
+| 6.18.49 | 26.1.8 | 2, wedged on 3 |
+| 6.18.49 | 24.0.9 | wedged on 1 |
+| 6.18.49 | 21.3.9 | 1, wedged on 2 |
+| **6.1.187 LTS** | 26.1.8 | 1, wedged on 2 |
+
+Five years of Mesa and two of kernels, all in the same 1–3 band, non-monotonic.
+6.1 predates the 6.3 nouveau fence rework and is no better. Nobody should spend
+more time pinning versions on this hardware.
+
+⚠ Mesa versions were built nouveau-only with `tools/mk-x86-sysroot.py`'s sibling
+recipe (`build-mesa.sh` in the bisect tree) and installed to `/opt/mesa-<ver>`,
+selected per-process with `LD_LIBRARY_PATH` + `LIBGL_DRIVERS_PATH`, so the system
+Mesa was never replaced.
+
+⚠ **`GRUB_DEFAULT` with a bare entry id silently boots the wrong kernel.** Void
+puts non-default kernels inside "Advanced options", and a nested entry needs the
+`submenu_id>entry_id` path. The first 6.1 run reported itself as a 6.1 test and
+was measuring 6.18 — caught only because the harness prints `uname -r`.
 
 ### The vertex path is most of it — `NV30_SWTNL=1` buys 4 soaks, then fails too
 
