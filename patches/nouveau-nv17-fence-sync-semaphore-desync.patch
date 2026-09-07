@@ -1,0 +1,76 @@
+Subject: drm/nouveau/nv17_fence: don't report a sync that never happened
+
+nv17_fence_sync() chains a GPU semaphore across two channels: the previous
+channel acquires value+0 and releases value+1, the new channel acquires
+value+1 and releases value+2. The semaphore is a single shared location and
+priv->sequence is the global counter that drives it, so the two have to stay
+in step.
+
+The counter was advanced before anything was emitted, each emission was
+conditional on its own PUSH_WAIT succeeding, and the function returned 0
+regardless:
+
+	value = priv->sequence;
+	priv->sequence += 2;
+	ret = PUSH_WAIT(ppush, 5);
+	if (!ret) { ...acquire value+0, release value+1...  }
+	if (!ret && !(ret = PUSH_WAIT(npush, 5))) { ...value+1, value+2... }
+	return 0;
+
+If either PUSH_WAIT fails the counter has still moved, so the semaphore is
+left permanently behind it, and the next sync emits an ACQUIRE for a value
+the semaphore will never reach. The channel that executes that acquire then
+sits with its pushbuf fully fetched (GET == PUT), PGRAPH idle and its fence
+never signalled -- indefinitely, with nothing logged anywhere. Captured on a
+GeForce 7600 GS:
+
+  STALL ch1 gr:status=00000000 ctxctl=0000e001 | put=00521f34 get=00521f34
+  fence deadline: want seq 2, engine at 0 -> engine is genuinely behind
+
+repeated identically while a second channel ran normally beside it.
+
+Returning 0 also tells nouveau_fence_sync() the GPU side is handled, so it
+skips the dma_fence_wait() fallback that would otherwise have been correct.
+
+Reserve room on both channels before consuming a sequence value, and return
+the error. The caller then falls back to a CPU wait, which is slower and
+always right.
+
+NOTE: this does not fix every stall on this hardware. A second, distinct mode
+remains, in which PGRAPH is busy, GET is behind PUT and not advancing, and
+CTX_CONTROL bit 0 is clear -- an engine hung mid-work rather than a channel
+blocked on a semaphore. That one is untouched by this patch.
+
+--- a/drivers/gpu/drm/nouveau/nv17_fence.c
++++ b/drivers/gpu/drm/nouveau/nv17_fence.c
+@@ nv17_fence_sync()
+-	spin_lock(&priv->lock);
+-	value = priv->sequence;
+-	priv->sequence += 2;
+-	spin_unlock(&priv->lock);
+-
+-	ret = PUSH_WAIT(ppush, 5);
+-	if (!ret) {
+-		...emit on prev...
+-	}
+-	if (!ret && !(ret = PUSH_WAIT(npush, 5))) {
+-		...emit on chan...
+-	}
+-	mutex_unlock(&cli->mutex);
+-	return 0;
++	ret = PUSH_WAIT(ppush, 5);
++	if (!ret)
++		ret = PUSH_WAIT(npush, 5);
++	if (ret) {
++		mutex_unlock(&cli->mutex);
++		return ret;
++	}
++
++	spin_lock(&priv->lock);
++	value = priv->sequence;
++	priv->sequence += 2;
++	spin_unlock(&priv->lock);
++
++	...emit on prev, then on chan, unconditionally...
++	mutex_unlock(&cli->mutex);
++	return 0;
