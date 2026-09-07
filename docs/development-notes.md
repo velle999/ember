@@ -284,6 +284,45 @@ a GPU already degraded by the preceding soaks. Once the engine has faulted,
 *everything* GL faults, which makes any measurement taken after the first wedge
 worthless. Reboot between tests.
 
+### ⛔ Patching nouveau: the module you install is NOT the module that runs
+
+Building a replacement `nouveau.ko` for this box works — Void's config is at
+`/boot/config-<ver>`, `modules_prepare` against the matching kernel.org tarball
+gives a `vermagic` that matches exactly (`6.1.187_1 SMP preempt mod_unload
+modversions 686`), and `make M=drivers/gpu/drm/nouveau modules` builds in
+minutes on a 12-core host through a Void i686 container.
+
+⛔ **AND IT WILL NOT BE LOADED.** nouveau is pulled in from the **initramfs** for
+early KMS — `Run /init` at 0.78 s, `nouveau … NVIDIA G73` at 3.29 s, before
+switch_root. Copying a module over `/lib/modules/…/nouveau.ko.zst` changes
+nothing until `dracut --force --kver <ver>` rebuilds the image. Four separate
+"the patch didn't fire" results were stock nouveau running, with a correct
+patched module sitting on disk and the md5 matching at every hop.
+
+⚠ **Verify the RUNNING artifact, not the shipped one.** The check that catches
+it in seconds is a `pr_err_once()` somewhere unmissable — `nouveau_fence_emit()`
+is called for every fence — and then `dmesg | grep`. Zero lines while GL is
+actively rendering is proof the code is not in play. Checking the file on disk
+proves only that the copy worked.
+
+⚠ Consequently **nothing was learned about which fence path this chip uses.**
+The "legacy wait is never called" reading came from a marker build that was
+never loaded, so it says nothing. `nouveau_fence_wait_legacy` in the stack
+traces remains the only real evidence and it came from stock nouveau.
+
+⛔ **A patch that faults takes the boot with it, silently.** A revision that
+dereferenced `chan` after `rcu_read_unlock()` — using `chan->fence` outside the
+critical section — went into the initramfs and the machine stopped booting with
+nothing on the console, because the fault happens before any logging survives.
+Recovery is the other kernel's boot entry: keep both installed, keep
+`nouveau.ko.zst.stock` beside the module, and **make experimental modules
+log-only first** so they cannot brick a boot before they have proved they run.
+
+⚠ `docker exec` **without `-i` discards stdin**, so `docker exec c python3 - <<EOF`
+runs an empty program and exits 0. Two "patches" were applied that way and were
+no-ops; the `sed` in the same session worked because it was an argument. If a
+heredoc into a container prints none of its own output, it did not run.
+
 ### ⛔ Do not buy an HD 2600 Pro AGP — `r600` is gone from this Mesa
 
 Checked the way `nv30` was checked, by reading the driver list out of
