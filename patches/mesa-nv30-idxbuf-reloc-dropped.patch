@@ -1,55 +1,54 @@
-nv30: keep the index buffer's bufctx ref alive until submit
+nv30: validate the index buffer's binding before the indexed draw
 
-On NV40_3D, an indexed draw with a real (non-user) index buffer and
-index_size > 1 programs IDXBUF_OFFSET/IDXBUF_FORMAT through PUSH_RESRC ->
-PUSH_MTHD.  PUSH_MTHD does NOT relocate inline: it registers the method in
-the bufctx (nouveau_bufctx_mthd -> nouveau_bufctx_refn, which puts the ref
-on bctx->pending) and writes bo->offset + data using whatever offset is
-known right now -- 0 for a buffer this submission has not validated yet.
+On NV40_3D an indexed draw with a real index buffer binds it through the buffer
+context: PUSH_RESRC/PUSH_MTHD register the method in the bufctx and write
+bo->offset + data inline using whatever offset is known right now, which is 0
+for a buffer this submission has not validated yet.
 
-libdrm's pushbuf_validate() is what turns that into a real address: it
-walks bctx->pending and, for every ref with ->packet set, emits the
-(method header, value) relocation pair the kernel later patches in.
+libdrm's pushbuf_validate() is what turns that into a real address. It walks
+bctx->pending and, for every ref carrying a ->packet, appends the (method
+header, value) relocation pair that the kernel patches at submit time, then
+drains pending into current.
 
-nv30_draw_elements() then called PUSH_RESET(push, BUFCTX_IDXBUF) at the end
-of the draw -- before the pushbuf is ever flushed.  nouveau_bufctx_reset()
-does DRMLISTDELINIT on each ref in the bin, taking it straight back off
-bctx->pending, so validate never sees it and the pair is never emitted.
-The unrelocated value stands.
+The only validation an indexed draw got ran inside nv30_state_validate(), which
+nv30_draw_vbo() calls before nv30_draw_elements(). So by the time the index
+buffer is bound, validation for this draw has already happened. Its relocation
+pair is never emitted, and IDXBUF_OFFSET reaches the engine as a bare,
+unrelocated resource offset -- 0x00000100 on the machine this was found on,
+which is not even page aligned. The engine fetches indices out of unrelated
+video memory and the garbage indices drive vertex fetches far past the end of
+the vertex array bound at VTXBUF0/VTXBUF1: DMA_VTX_PROTECTION, on every
+indexed VBO draw, deterministically.
 
-Observed on a GeForce 7 (AGP) running vbo-drawelements: the faulting push
-carries 16 relocations covering every GPU address in it -- three M2MF
-copy pairs, COLOR0_OFFSET, ZETA_OFFSET, FP_ACTIVE_PROGRAM, VTXBUF0 and
-VTXBUF1 -- and none for IDXBUF.  IDXBUF_OFFSET reaches the GPU as a bare
-0x00000100, which is not even 4K aligned and so cannot be a validated BO
-address.  The engine fetches U32 indices out of unrelated VRAM, and the
-garbage indices drive vertex fetches far outside the 16-byte-stride array
-bound at VTXBUF0/VTXBUF1 -- DMA_VTX_PROTECTION, every time, deterministically.
+The vertex and fragment-program bindings are registered during state validation
+and so are covered by that same validate, which is why they alone come back
+correctly relocated in the very same push -- a controlled comparison inside one
+submission.
 
-BUFCTX_VTXBUF and BUFCTX_FRAGPROG are not reset in the same function, which
-is exactly why they do get their relocation pairs in that same push.
+Validating again after the binding, before the draw is emitted, is enough.
 
-Move the reset to the top of the block, so each draw still starts with a
-clean bin but the ref survives to submit.
+Measured on a GeForce 7600 GS (NV4B, class 4097) with mesa-demos:
+  stock  -- 16 relocations in the faulting push, none for IDXBUF, 1 fault/run
+  fixed  -- 20 relocations, including the pairs whose constants decode to
+            0004f81c (IDXBUF_OFFSET) and 0004f820 (IDXBUF_FORMAT),
+            and 0 faults over 12 consecutive runs, no kernel oops
 
 --- a/src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 10:10:59.772566855 +0000
-+++ src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 10:10:59.796689835 +0000
-@@ -482,6 +482,7 @@
- 
-       assert(nouveau_resource_mapped_by_gpu(&res->base));
- 
-+      PUSH_RESET(push, BUFCTX_IDXBUF);
-       BEGIN_NV04(push, NV30_3D(IDXBUF_OFFSET), 2);
-       PUSH_RESRC(push, NV30_3D(IDXBUF_OFFSET), BUFCTX_IDXBUF, res, offset,
-                        NOUVEAU_BO_LOW | NOUVEAU_BO_RD, 0, 0);
-@@ -510,7 +511,9 @@
-       }
++++ b/src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 10:43:54.068128328 +0000
+@@ -489,6 +489,16 @@
+                        (index_size == 2) ? 0x00000010 : 0x00000000,
+                        res->domain | NOUVEAU_BO_RD,
+                        0, NV30_3D_IDXBUF_FORMAT_DMA1);
++      /* The index buffer is bound through the buffer context, which defers its
++       * relocation to pushbuf validation -- and nv30_state_validate(), the only
++       * validation this draw would otherwise get, has already run by the time we
++       * get here. Without validating again the relocation pair is never emitted
++       * for this submission, and IDXBUF_OFFSET reaches the engine as a bare,
++       * unrelocated resource offset. The engine then fetches indices from
++       * unrelated memory and the garbage indices drive vertex fetches past the
++       * end of the vertex array: DMA_VTX_PROTECTION. */
++      if (PUSH_VAL(push))
++         return;
        BEGIN_NV04(push, NV30_3D(VERTEX_BEGIN_END), 1);
-       PUSH_DATA (push, NV30_3D_VERTEX_BEGIN_END_STOP);
--      PUSH_RESET(push, BUFCTX_IDXBUF);
-+      /* NO reset here: the bufctx ref is what carries the deferred
-+       * relocation of IDXBUF_OFFSET/FORMAT to submit time. Resetting the
-+       * bin before the flush drops it, and the unrelocated offset stands. */
-    } else {
-       const void *data;
-       if (!info->has_user_indices)
+       PUSH_DATA (push, prim);
+       while (count) {

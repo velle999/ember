@@ -175,10 +175,19 @@ indices out of unrelated video memory, and those indices send vertex fetches pas
 the end of the vertex array — the protection fault.
 
 `nv30_draw_elements()` binds the index buffer through the buffer context, which is
-what defers the relocation to submit time, and then releases that reference at the
-end of the draw, before the command buffer is ever flushed. The relocation is
-dropped with it. The vertex and fragment-program bindings in the same draw are not
-released early, which is why they alone come back correctly relocated.
+what defers its relocation to pushbuf validation. But the only validation an
+indexed draw gets runs earlier, inside `nv30_state_validate()`, so by the time the
+index buffer is bound the relocation for that draw has already been emitted and it
+misses it. The vertex and fragment-program bindings are registered during state
+validation and are covered by it, which is why they alone come back correctly
+relocated in the very same command buffer.
+
+Validating once more after the binding, before the draw is emitted, is enough.
+`patches/mesa-nv30-idxbuf-reloc-dropped.patch` does that. Measured on the reference
+machine: stock Mesa puts 16 relocations in the faulting command buffer, none of them
+for the index buffer, and faults on every run; patched it emits 20 — the two extra
+pairs being the index buffer's — and ran twelve consecutive times with no fault and
+no kernel error.
 
 **`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
 it.** The engine still faults; the driver now notices a fence past its deadline,
@@ -191,12 +200,11 @@ browser — is unaffected.
 
 ## Not done yet
 
-- **Confirming the `nv30` index-buffer fix.**
-  `patches/mesa-nv30-idxbuf-reloc-dropped.patch` holds the index buffer's binding
-  until the command buffer is submitted. It builds, but it has **not been tested on
-  hardware yet**. `vbo-drawelements` reproduces the fault in eight seconds and is
-  the check: the draw should run clean, and the dump should show a relocation for
-  `IDXBUF_OFFSET`.
+- **Getting the index-buffer fix in front of the X server.** The patch is verified
+  against `vbo-drawelements`, but the X server's own 2D acceleration still loads
+  the distribution's unpatched Mesa, so the desktop can still fault. That needs a
+  rebuilt Mesa package rather than the test tree, which is nouveau-only and carries
+  no software-rendering fallback.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.
