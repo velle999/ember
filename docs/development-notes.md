@@ -323,6 +323,51 @@ runs an empty program and exits 0. Two "patches" were applied that way and were
 no-ops; the `sed` in the same session worked because it was an argument. If a
 heredoc into a container prints none of its own output, it did not run.
 
+### The fault is INDEXED VBO DRAWS — a one-command reproducer
+
+Bisected with mesa-demos on a clean boot, each program run alone for 8s and the
+`DMA_VTX_PROTECTION` count read from dmesg after each:
+
+| demo | path | VTX faults |
+|---|---|---|
+| `tri`, `tri-orig` | immediate mode (`glBegin`/`glEnd`) | 0 |
+| `drawarrays` | client-side vertex arrays | 0 |
+| `drawelements` | indexed client arrays | 0 |
+| `vbo-drawarrays` | VBO, non-indexed | 0 |
+| **`vbo-drawelements`** | **indexed draw from a VBO** | **1, every run** |
+
+⛔ **`vbo-drawelements` is a deterministic 8-second reproducer.** One fault per
+run, repeatable, and the second run wedged the GPU. No soaking required — this
+replaces the 2-minute `wedge-test` for root-cause work.
+
+⚠ **This is why "menus and file browsing" was the reported trigger, not games.**
+glamor draws via indexed VBOs, so Xorg itself walks straight into it. A clean
+boot showed 3 VTX faults before anything was launched.
+
+**Eliminated so far:**
+
+- ⛔ **Not the DMA object block.** `nv30_screen.c` pushes 13 sequential handles
+  from `DMA_NOTIFY`, and the registers *are* contiguous `0x180`–`0x1b0`, so
+  `VTXBUF0`/`VTXBUF1`/`FENCE` land on the right methods. Checked against the
+  rnndb header rather than assumed.
+- ⚠ **The reported `mthd` is not the culprit.** Faults name `mthd 1d6c`
+  (`NV30_3D_FENCE_OFFSET`) with `data 0`, but the 3D engine pipelines: an async
+  vertex fetch faults and surfaces at whatever method is current. Do not go
+  hunting in the fence code — that was a dead end.
+- ⚠ `NOUVEAU_LIBDRM_GART_LIMIT_PERCENT=0` to force buffers to VRAM **segfaults**
+  the client, so that placement experiment is a non-result, not evidence.
+
+**Where to pick it up:** the vertex path is bound in `nv30_vbo.c` as
+`offset = ve->src_offset + vb->buffer_offset` with no explicit limit — the bound
+comes from the DMA object (`VTXBUF0`=VRAM, `VTXBUF1`=GART). Indexed draws also
+program `NV40_3D_VB_ELEMENT_BASE` from `index_bias`, cached in
+`nv30->state.index_bias` and only re-emitted when it changes. A stale cached
+value after a channel reset would put fetches out of range while sequential
+draws stayed inside — untested, but it fits the shape.
+
+Next tool needed is a pushbuf dump on a faulting draw, to read the actual
+programmed base/offset rather than inferring it.
+
 ### ⛔ Do not buy an HD 2600 Pro AGP — `r600` is gone from this Mesa
 
 Checked the way `nv30` was checked, by reading the driver list out of
