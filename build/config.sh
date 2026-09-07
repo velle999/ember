@@ -12,14 +12,21 @@ EMBER_VERSION="0.1.0"
 VOID_REPO_I686="https://repo-default.voidlinux.org/current"
 VOID_REPO_AARCH64="https://repo-default.voidlinux.org/current/aarch64"
 
-# ⚠ THE PI KERNEL IS PER MODEL. Void ships rpi4-kernel and rpi5-kernel as
-# separate packages and there is no rpi5-base — a Pi 5 image takes rpi-base with
-# rpi5-kernel, a Pi 4 takes rpi4-base with rpi4-kernel. Getting this wrong builds
-# an image that installs cleanly and does not boot.
+# ⚠ THE PI KERNEL IS PER MODEL, and the packaging MOVED (checked 2026-09-06).
+# Void has unified the base and the 3/4 kernel: `rpi-base` and `rpi-kernel` are
+# the real packages now, and `rpi4-base` / `rpi4-kernel` are TRANSITIONAL DUMMY
+# packages that merely depend on them. Asking for the old names still works and
+# will keep working right up until Void drops the dummies, at which point Pi 4
+# images stop building for no visible reason.
+#
+# ⚠ The asymmetry this file used to warn about is gone the other way round: it
+# is no longer "rpi4-base but no rpi5-base". BOTH models take `rpi-base` now;
+# only the kernel differs — `rpi-kernel` for a Pi 3/4, `rpi5-kernel` for a Pi 5.
+# Getting it wrong still builds an image that installs cleanly and does not boot.
 RPI_MODEL="${RPI_MODEL:-4}"
 
 case "$RPI_MODEL" in
-    4) RPI_PKGS="rpi4-base rpi4-kernel" ;;
+    4) RPI_PKGS="rpi-base rpi-kernel" ;;
     5) RPI_PKGS="rpi-base rpi5-kernel" ;;
     *) echo "config.sh: RPI_MODEL must be 4 or 5 (got '$RPI_MODEL')" >&2; return 1 2>/dev/null || exit 1 ;;
 esac
