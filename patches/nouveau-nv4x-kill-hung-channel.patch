@@ -1,0 +1,66 @@
+Subject: drm/nouveau: declare the channel dead when fences stop retiring
+
+On nv4x (tested: G73 / GeForce 7600 GS) the graphics engine faults under
+sustained GL load and never retires another fence. Measured with a probe in
+nouveau_fence_wait_legacy: 790 hits on the fence deadline, done=0 every single
+time, 760 of them on Xorg's channel. The waits reaching that point are long --
+698 at nouveau_gem_ioctl_cpu_prep's 30s and 78 at MAX_SCHEDULE_TIMEOUT from
+nouveau_bo_move -- so userspace waits, times out, retries, forever.
+
+The desktop is livelocked rather than deadlocked, which is why X keeps
+answering non-GL clients while every GL request hangs and the machine appears
+to need a power cycle.
+
+nouveau already knows how to recover from a dead channel:
+nouveau_channel_killed() sets chan->killed and calls
+nouveau_fence_context_kill(), after which nouveau_gem_ioctl_pushbuf() returns
+-ENODEV and the client exits cleanly. That path is driven by a FIFO
+notification which never arrives on this chip, so nothing ever declares the
+channel dead.
+
+Trigger the same recovery from the fence's own deadline. fence->timeout is
+absolute -- set to jiffies + 15s at emit -- so it survives across the repeated
+short waits, unlike anything measured from function entry.
+
+Result on the reference machine: previously wedged within 1-3 soaks under every
+Mesa from 21.3.9 to 26.1.8 and on kernels 6.1 and 6.18. With this patch the
+engine still dies (that defect is untouched) but the desktop survives: Xorg
+stays out of D state, X keeps serving, and the GL client takes the error.
+
+--- a/drivers/gpu/drm/nouveau/nouveau_fence.c
++++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
+@@ nouveau_fence_wait_legacy()
+ 		t = jiffies;
+ 
++		/*
++		 * The engine is dead -- declare the channel dead too, so
++		 * userspace gets -ENODEV instead of retrying forever.
++		 *
++		 * Everything touching chan stays inside the RCU section: an
++		 * earlier revision used chan->fence after rcu_read_unlock().
++		 */
++		if (time_after_eq(t, fence->timeout)) {
++			struct nouveau_channel *chan;
++			int chid = -1;
++
++			rcu_read_lock();
++			chan = rcu_dereference(fence->channel);
++			if (chan && !atomic_xchg(&chan->killed, 1)) {
++				chid = chan->chid;
++				if (chan->fence)
++					nouveau_fence_context_kill(chan->fence,
++								   -ENODEV);
++			}
++			rcu_read_unlock();
++
++			if (chid >= 0)
++				pr_err("nouveau: channel %d stopped retiring fences - marking it dead\n",
++				       chid);
++			__set_current_state(TASK_RUNNING);
++			return -ENODEV;
++		}
++
+ 		if (wait != MAX_SCHEDULE_TIMEOUT && time_after_eq(t, timeout)) {
+ 			__set_current_state(TASK_RUNNING);
+ 			return 0;
+ 		}
