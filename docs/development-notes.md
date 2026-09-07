@@ -642,6 +642,45 @@ instead — `fsck.erofs --extract=DIR --overwrite img.ero` — and point
 `FEXBash` is the convenient entry point. And `pgrep -x steam` finds nothing
 while Steam is running perfectly well — the processes are `steamwebhelper`.
 
+### ✅ Thunks built, installed and working — GL now runs at host speed (2026-09-06)
+
+Measured on the reference Pi, `glxgears` in the same session:
+
+```
+x86_64 under FEX, GL thunks:  1328 / 1194 FPS
+host native aarch64:          1268 FPS
+```
+
+Emulated x86_64 GL is now indistinguishable from native, because it *is* native —
+the guest calls are forwarded to the host's own `vc4_dri.so`. Before thunks the
+same binary got llvmpipe.
+
+⛔ **Installing the thunks is not enough; they must be ENABLED.** `ninja install`
+puts 13 guest and 12 host libraries under `/usr/share/fex-emu/GuestThunks*` and
+writes `ThunksDB.json`, and FEX then ignores all of it. Each entry is opt-in from
+`~/.fex-emu/Config.json`:
+
+```json
+{ "Config": { "RootFS": "Ubuntu_24_04" },
+  "ThunksDB": { "GL": 1, "drm": 1, "Vulkan": 1,
+                "asound": 1, "WaylandClient": 1, "cuda": 1 } }
+```
+
+⛔ **Do NOT enable `fex_thunk_test`** — it is FEX's own test harness and it
+**segfaults the emulator** (exit 139) on anything, including `echo`. Enabling the
+whole `ThunksDB` list at once therefore looks like "thunks crash FEX". Every
+other entry is fine; it was found by bisecting the list one at a time.
+
+⚠ The failure states are distinguishable and worth knowing apart:
+`vc4: driver missing` + llvmpipe means the thunk is **not being used at all**;
+`GLXBadFBConfig` means it **is** being used and only the config negotiation
+failed (`glxinfo -B` provokes it, `glxgears` runs fine).
+
+⚠ **Steam's UI will not benefit.** FEX ships
+`/usr/share/fex-emu/AppConfig/steamwebhelper.json` which sets `"GL": 0`
+deliberately — the client's CEF chrome bypasses libGL's glX for xcb. Games get
+hardware GL; the browser furniture the client is built from does not.
+
 ⛔ **It is not usable, and that is the honest summary.** It runs — the client
 starts, the UI renders, it reaches a login — and then it is too slow to
 actually use, and crashes when a game is installed. Treat this as a
