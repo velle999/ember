@@ -182,12 +182,18 @@ misses it. The vertex and fragment-program bindings are registered during state
 validation and are covered by it, which is why they alone come back correctly
 relocated in the very same command buffer.
 
-Validating once more after the binding, before the draw is emitted, is enough.
-`patches/mesa-nv30-idxbuf-reloc-dropped.patch` does that. Measured on the reference
-machine: stock Mesa puts 16 relocations in the faulting command buffer, none of them
-for the index buffer, and faults on every run; patched it emits 20 — the two extra
-pairs being the index buffer's — and ran twelve consecutive times with no fault and
-no kernel error.
+`patches/mesa-nv30-idxbuf-reloc-dropped.patch` takes the driver's other index path
+instead — the inline one that the older chips and user-supplied indices already use,
+which has no index buffer to relocate at all. Measured on the reference machine, the
+protection fault is gone: stock faults on every single run, patched runs fifteen
+consecutive times clean.
+
+**That fixes the fault but not the freeze.** There is a second, unrelated fault in
+this driver, and it is the one that actually wedges the machine: under sustained 3D
+the engine simply stops retiring fences, with no error reported anywhere. It is not
+a consequence of the first problem — it still happens with indexed draws taken out
+of the picture entirely. The `CACHE_ERROR` messages that follow are the FIFO
+replaying a channel that is already dead, not the cause.
 
 **`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
 it.** The engine still faults; the driver now notices a fence past its deadline,
@@ -200,11 +206,10 @@ browser — is unaffected.
 
 ## Not done yet
 
-- **Getting the index-buffer fix in front of the X server.** The patch is verified
-  against `vbo-drawelements`, but the X server's own 2D acceleration still loads
-  the distribution's unpatched Mesa, so the desktop can still fault. That needs a
-  rebuilt Mesa package rather than the test tree, which is nouveau-only and carries
-  no software-rendering fallback.
+- **The engine stops retiring fences under sustained 3D, and nothing says why.**
+  This is what freezes the desktop. No fault, no error — the first line in the log
+  is the containment patch noticing a fence past its deadline. Everything tunable
+  has been tried. This is the open problem.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.

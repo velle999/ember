@@ -1,54 +1,68 @@
-nv30: validate the index buffer's binding before the indexed draw
+nv30: stop using the hardware index-buffer path on NV40
 
-On NV40_3D an indexed draw with a real index buffer binds it through the buffer
-context: PUSH_RESRC/PUSH_MTHD register the method in the bufctx and write
-bo->offset + data inline using whatever offset is known right now, which is 0
-for a buffer this submission has not validated yet.
+An indexed draw with a real index buffer binds it through the buffer context:
+PUSH_RESRC/PUSH_MTHD register the method in the bufctx and write bo->offset +
+data inline, using whatever offset is known at emit time -- 0 for a buffer this
+submission has not validated yet. libdrm's pushbuf_validate() is what turns that
+into a real address: it walks bctx->pending and appends the (method header,
+value) relocation pair the kernel patches at submit time.
 
-libdrm's pushbuf_validate() is what turns that into a real address. It walks
-bctx->pending and, for every ref carrying a ->packet, appends the (method
-header, value) relocation pair that the kernel patches at submit time, then
-drains pending into current.
-
-The only validation an indexed draw got ran inside nv30_state_validate(), which
-nv30_draw_vbo() calls before nv30_draw_elements(). So by the time the index
-buffer is bound, validation for this draw has already happened. Its relocation
-pair is never emitted, and IDXBUF_OFFSET reaches the engine as a bare,
-unrelocated resource offset -- 0x00000100 on the machine this was found on,
-which is not even page aligned. The engine fetches indices out of unrelated
-video memory and the garbage indices drive vertex fetches far past the end of
-the vertex array bound at VTXBUF0/VTXBUF1: DMA_VTX_PROTECTION, on every
+But the only validation an indexed draw gets runs inside nv30_state_validate(),
+which nv30_draw_vbo() calls before nv30_draw_elements(). The index buffer is
+bound after that, so its pair is never emitted and IDXBUF_OFFSET reaches the
+engine as a bare, unrelocated resource offset -- 0x00000100 on the machine this
+was found on, which is not even page aligned. The engine fetches indices out of
+unrelated video memory and the garbage indices drive vertex fetches far past the
+end of the vertex array bound at VTXBUF0/VTXBUF1: DMA_VTX_PROTECTION, on every
 indexed VBO draw, deterministically.
 
 The vertex and fragment-program bindings are registered during state validation
-and so are covered by that same validate, which is why they alone come back
-correctly relocated in the very same push -- a controlled comparison inside one
-submission.
+and so are covered by that validate, which is why they alone come back correctly
+relocated in the very same push -- a controlled comparison inside one submission.
 
-Validating again after the binding, before the draw is emitted, is enough.
+Validating again after the binding does emit the relocation and does eliminate
+the faults -- measured, 16 relocations becoming 20 and zero faults over fifteen
+consecutive runs of a reproducer that previously faulted every time. It is not
+enough on its own. nv30_draw_vbo() reserves no pushbuf space between state
+validation and the draw, so those extra dwords overrun the ring and the engine
+reports DMA_PUSHER INVALID_CMD; and reserving space per batch instead puts a
+flush point inside VERTEX_BEGIN_END, where nouveau_pushbuf_space() finishes a
+flush by re-running validate, re-emitting vertex state inside an open primitive
+and hanging the engine with no fault code at all.
 
-Measured on a GeForce 7600 GS (NV4B, class 4097) with mesa-demos:
-  stock  -- 16 relocations in the faulting push, none for IDXBUF, 1 fault/run
-  fixed  -- 20 relocations, including the pairs whose constants decode to
-            0004f81c (IDXBUF_OFFSET) and 0004f820 (IDXBUF_FORMAT),
-            and 0 faults over 12 consecutive runs, no kernel oops
+Rather than add a space budget to a path that never had one, take the branch
+that has no index buffer to relocate. The inline path is what nv30/nv34 and user
+indices already use. It costs CPU -- indices go through the FIFO instead of by
+DMA -- which on the affected hardware is a good trade for a driver that
+otherwise faults on every indexed draw.
 
 --- a/src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 10:10:59.772566855 +0000
-+++ b/src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 10:43:54.068128328 +0000
-@@ -489,6 +489,16 @@
-                        (index_size == 2) ? 0x00000010 : 0x00000000,
-                        res->domain | NOUVEAU_BO_RD,
-                        0, NV30_3D_IDXBUF_FORMAT_DMA1);
-+      /* The index buffer is bound through the buffer context, which defers its
-+       * relocation to pushbuf validation -- and nv30_state_validate(), the only
-+       * validation this draw would otherwise get, has already run by the time we
-+       * get here. Without validating again the relocation pair is never emitted
-+       * for this submission, and IDXBUF_OFFSET reaches the engine as a bare,
-+       * unrelocated resource offset. The engine then fetches indices from
-+       * unrelated memory and the garbage indices drive vertex fetches past the
-+       * end of the vertex array: DMA_VTX_PROTECTION. */
-+      if (PUSH_VAL(push))
-+         return;
-       BEGIN_NV04(push, NV30_3D(VERTEX_BEGIN_END), 1);
-       PUSH_DATA (push, prim);
-       while (count) {
++++ b/src/gallium/drivers/nouveau/nv30/nv30_vbo.c	2026-09-07 11:56:42.317591505 +0000
+@@ -475,7 +475,26 @@
+       nv30->state.index_bias = index_bias;
+    }
+ 
+-   if (eng3d->oclass == NV40_3D_CLASS && index_size > 1 &&
++   /* The hardware index-buffer path is broken on this driver and cannot be
++    * fixed from here. It binds the index buffer through the buffer context,
++    * which defers the relocation to pushbuf validation -- but the only
++    * validation a draw gets runs earlier, inside nv30_state_validate(), so the
++    * relocation is never emitted. IDXBUF_OFFSET reaches the engine as a bare,
++    * unrelocated resource offset (0x100 on the machine this was found on, not
++    * even page aligned). The engine fetches indices from unrelated video memory
++    * and the garbage indices drive vertex fetches past the end of the vertex
++    * array: DMA_VTX_PROTECTION on every indexed VBO draw.
++    *
++    * Validating again after the binding does emit the relocation and does stop
++    * the faults, but nv30_draw_vbo() reserves no pushbuf space between state
++    * validation and here, so the extra dwords overrun the ring (DMA_PUSHER
++    * INVALID_CMD), and reserving per batch puts a flush inside VERTEX_BEGIN_END,
++    * where a flush re-emits vertex state and hangs the engine.
++    *
++    * The inline path below has no index buffer to relocate and no accounting to
++    * get wrong. It costs CPU -- indices go through the FIFO rather than by DMA
++    * -- and it is the path nv30/nv34 and user indices already take. */
++   if (0 && eng3d->oclass == NV40_3D_CLASS && index_size > 1 &&
+        !info->has_user_indices) {
+       struct nv04_resource *res = nv04_resource(info->index.resource);
+       unsigned offset = 0;
