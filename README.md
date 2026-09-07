@@ -153,8 +153,33 @@ docs/         development notes
 
 ---
 
+## Known: the GeForce 7's 3D driver is broken, and the desktop survives it
+
+On the reference Pentium 4 (GeForce 7600 GS, `nouveau`'s `nv30`/nv4x driver),
+sustained 3D faults the graphics engine and it stops retiring fences. Every
+waiter then blocks forever, so the desktop appears frozen with the mouse still
+moving. It is **not** the hardware — the same card is stable under Windows XP on
+the same machine.
+
+**Narrowed to indexed VBO draws.** Bisected with mesa-demos: immediate mode,
+client vertex arrays, indexed client arrays and non-indexed VBOs are all clean;
+`vbo-drawelements` faults on every run. That is also why the symptom shows up in
+menus and file browsing rather than in games — glamor, the X server's 2D
+acceleration, draws through indexed VBOs.
+
+**`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
+it.** The engine still faults; the driver now notices a fence past its deadline,
+marks the channel dead and returns `-ENODEV`, so the GL program takes the error
+and the desktop keeps running. Verified over 34 firings with no kernel oops.
+
+⚠ It is containment, not a cure. There is no engine reset, so once 3D has faulted
+it stays dead until reboot. Ordinary 2D use — desktop, menus, file manager,
+browser — is unaffected.
+
 ## Not done yet
 
+- **A proper fix for the `nv30` vertex path.** `vbo-drawelements` reproduces the
+  fault in eight seconds, which is the place to start.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.
