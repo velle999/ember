@@ -30,8 +30,16 @@ flush point inside VERTEX_BEGIN_END, where nouveau_pushbuf_space() finishes a
 flush by re-running validate, re-emitting vertex state inside an open primitive
 and hanging the engine with no fault code at all.
 
-Rather than add a space budget to a path that never had one, take the branch
-that has no index buffer to relocate. The inline path is what nv30/nv34 and user
+NOTE: the space reasoning above is retracted. BEGIN_NV04/BEGIN_NI04 call
+PUSH_SPACE(size + 1) internally -- NV50_PUSH_EXPLICIT_SPACE_CHECKING is only set
+in nv50 query code, never for nv30 -- so this path was never missing a space
+budget, and the real cause of the DMA_PUSHER INVALID_CMD those revisions produced
+was never established. What is measured and reproducible is that emitting the
+relocation from here destabilised the ring in several different ways, and that
+the branch below is clean.
+
+Rather than keep adding to a path that resists it, take the branch that has no
+index buffer to relocate. The inline path is what nv30/nv34 and user
 indices already use. It costs CPU -- indices go through the FIFO instead of by
 DMA -- which on the affected hardware is a good trade for a driver that
 otherwise faults on every indexed draw.
