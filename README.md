@@ -167,6 +167,19 @@ client vertex arrays, indexed client arrays and non-indexed VBOs are all clean;
 menus and file browsing rather than in games — glamor, the X server's 2D
 acceleration, draws through indexed VBOs.
 
+**The cause is in Mesa, not the kernel and not the card.** A pushbuf dump of a
+faulting draw carries relocations for every GPU address in the submission except
+the index buffer's: `IDXBUF_OFFSET` reaches the engine as a bare `0x100`, an
+address too small and too misaligned to be a real buffer. The engine reads
+indices out of unrelated video memory, and those indices send vertex fetches past
+the end of the vertex array — the protection fault.
+
+`nv30_draw_elements()` binds the index buffer through the buffer context, which is
+what defers the relocation to submit time, and then releases that reference at the
+end of the draw, before the command buffer is ever flushed. The relocation is
+dropped with it. The vertex and fragment-program bindings in the same draw are not
+released early, which is why they alone come back correctly relocated.
+
 **`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
 it.** The engine still faults; the driver now notices a fence past its deadline,
 marks the channel dead and returns `-ENODEV`, so the GL program takes the error
@@ -178,8 +191,12 @@ browser — is unaffected.
 
 ## Not done yet
 
-- **A proper fix for the `nv30` vertex path.** `vbo-drawelements` reproduces the
-  fault in eight seconds, which is the place to start.
+- **Confirming the `nv30` index-buffer fix.**
+  `patches/mesa-nv30-idxbuf-reloc-dropped.patch` holds the index buffer's binding
+  until the command buffer is submitted. It builds, but it has **not been tested on
+  hardware yet**. `vbo-drawelements` reproduces the fault in eight seconds and is
+  the check: the draw should run clean, and the dump should show a relocation for
+  `IDXBUF_OFFSET`.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.

@@ -877,3 +877,46 @@ the files os-prober keys on — then installs onto it twice and compares a
 **sha256 of the entire NTFS partition** before and after, plus every line of the
 partition table. All three rigs are green.
 
+
+## Reading a nouveau pushbuf dump
+
+`NOUVEAU_LIBDRM_DEBUG=1` makes libdrm print every submission: a `krec` header, the
+buffer list, the raw command dwords, and the relocation list. It is how the `nv30`
+index-buffer bug was found, and it is worth knowing how to read.
+
+Three traps cost real time here.
+
+**`NOUVEAU_LIBDRM_OUT=<file>` silently truncates.** It is an ordinary stdio stream,
+so when `timeout` kills the client the last buffer is never flushed and the dump
+stops dead at 8192 bytes — mid-draw, with no indication anything is missing. Leave
+the variable unset and redirect **stderr** instead, which is unbuffered:
+
+    NOUVEAU_LIBDRM_DEBUG=1 timeout 8 vbo-drawelements 2>/tmp/dump.log
+
+**A naive command-stream walker desynchronises.** Headers are
+`(size << 18) | (subchannel << 13) | method`, with bit 30 marking a non-incrementing
+run — but `0x00000000` is a NOP, and a walker that treats a zero-size header as an
+error, or as a one-dword method, drifts and then mislabels every method after it.
+Skip zero dwords as NOPs.
+
+**The interesting slots are zeros in the dump.** Anything libdrm defers to the
+kernel is emitted as blank space, so a method that is about to be given a real GPU
+address appears as a run of NOPs. The relocation list is what fills them: entries
+come in pairs, the first with `flags=0` writing the **method header** as a constant,
+the second writing the value. That first entry is the anchor — decode its `data` as
+a header and it names the method, which lets a drifting walk be re-synchronised
+against known offsets.
+
+What the relocations mean once parsed: `flags` is a bitmask, `1` = low 32 bits of
+the address, `2` = high, `4` = OR in `vor` or `tor` depending on where the buffer
+landed — `vor` if it was placed in VRAM, `tor` if in GART. So a `VTXBUF` entry with
+`vor=0` and `tor=0x80000000` is the driver saying "select the GART DMA object if
+this buffer ended up in GART", and the kernel picks one at submit time.
+
+The absence of an entry is the signal. Every GPU address in a submission should have
+one. Counting them against the methods that need them is what exposed the index
+buffer: sixteen relocations, all accounted for by other methods, none for `IDXBUF`.
+
+**Sanity check any address you read.** Buffer objects are page aligned. An offset
+like `0x100` cannot be one, so it is an unrelocated value regardless of what else
+the dump seems to say.
