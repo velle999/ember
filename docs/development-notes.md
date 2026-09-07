@@ -676,10 +676,31 @@ other entry is fine; it was found by bisecting the list one at a time.
 `GLXBadFBConfig` means it **is** being used and only the config negotiation
 failed (`glxinfo -B` provokes it, `glxgears` runs fine).
 
-⚠ **Steam's UI will not benefit.** FEX ships
-`/usr/share/fex-emu/AppConfig/steamwebhelper.json` which sets `"GL": 0`
-deliberately — the client's CEF chrome bypasses libGL's glX for xcb. Games get
-hardware GL; the browser furniture the client is built from does not.
+⛔ **DO NOT ENABLE THUNKS GLOBALLY — IT BREAKS STEAM.** FEX ships
+`/usr/share/fex-emu/AppConfig/steamwebhelper.json` setting `"GL": 0` on purpose,
+because the client's CEF chrome bypasses libGL's glX for xcb. Thunking GL under
+it crashes the web helper and Steam never reaches a window.
+
+⚠ **And a user-global `ThunksDB` OVERRIDES that shipped AppConfig**, which is the
+opposite of the precedence you would assume. Writing
+`~/.fex-emu/Config.json` with `"ThunksDB": {"GL": 1}` re-enables the very thing
+FEX disables for Steam. Measured: 17 processes / 9 `steamwebhelper` working,
+versus 7 / 2 with a fresh crash dump once thunks were on globally.
+
+⚠ Re-asserting `"GL": 0` in a **user** AppConfig
+(`~/.fex-emu/AppConfig/steamwebhelper.json`) does **not** rescue it either — it
+still crashed. Do not try to out-layer this.
+
+✅ **Enable thunks PER APPLICATION instead**, which does work:
+
+```
+~/.fex-emu/Config.json              { "Config": { "RootFS": "Ubuntu_24_04" } }
+~/.fex-emu/AppConfig/glxgears.json  { "ThunksDB": { "GL": 1 } }
+```
+
+Verified: Steam healthy (15 procs / 9 helpers / no dumps) *and* `glxgears` on
+hardware GL in the same session. So the rule is thunks **off** by default, named
+per binary for the things that want them — a game, not the launcher.
 
 ⛔ **It is not usable, and that is the honest summary.** It runs — the client
 starts, the UI renders, it reaches a login — and then it is too slow to
