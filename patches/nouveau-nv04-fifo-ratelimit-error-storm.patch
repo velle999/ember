@@ -1,0 +1,49 @@
+Subject: drm/nouveau/fifo/nv04: rate limit the CACHE_ERROR and DMA_PUSHER storms
+
+nv04_fifo_intr_cache_error() handles one CACHE1 entry per interrupt -- it
+reads the method at GET, reports it, then advances GET by four. Draining a
+full cache therefore emits one error line per queued method, hundreds of them
+back to back, with nothing limiting the rate.
+
+On a single core machine that is enough to livelock the box on its own, and
+with netconsole configured every one of those lines is a synchronous UDP
+packet. Captured on a GeForce 7600 GS in a Pentium 4, the last thing the
+kernel ever said was:
+
+  fifo: CACHE_ERROR - ch 3 [glxgears] subc 7 mthd 1f0c data 3e87a5f8   (x N)
+  clocksource: Long readout interval, skipping watchdog check: cs_nsec: 4795566857
+
+A 4.8 second stall, and then nothing. The machine had to be power cycled.
+
+The reporting is incidental here; the register writes below it are what
+actually recovers the FIFO, and they still run for every entry. Rate limiting
+only the message keeps the recovery intact and keeps the machine alive.
+nvkm_error_ratelimited() already exists for exactly this.
+
+nv04_fifo_intr_dma_pusher() floods the same way from the same class of event
+and gets the same treatment.
+
+Measured on the reference machine: ten rounds of unthrottled glxgears, seven
+of which stalled the engine. Before, the first storm took the machine down
+hard with no oops and no further kernel output. After, 478 callbacks
+suppressed, the X server dies and respawns each time, and the box is still
+running. The underlying engine stall is untouched -- this is about surviving
+it.
+
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+@@ nv04_fifo_intr_cache_error()
+ 	if (!(pull0 & 0x00000100) ||
+ 	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
+ 		chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+-		nvkm_error(subdev, "CACHE_ERROR - "
++		nvkm_error_ratelimited(subdev, "CACHE_ERROR - "
+ 			   "ch %d [%s] subc %d mthd %04x data %08x\n",
+ 			   chid, chan ? chan->name : "unknown",
+ 			   (mthd >> 13) & 7, mthd & 0x1ffc, data);
+ 		nvkm_chan_put(&chan, flags);
+ 	}
+@@ nv04_fifo_intr_dma_pusher()
+-		nvkm_error(subdev, "DMA_PUSHER - "
++		nvkm_error_ratelimited(subdev, "DMA_PUSHER - "
+ 			   ...

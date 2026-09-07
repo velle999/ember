@@ -45,12 +45,17 @@ stays out of D state, X keeps serving, and the GL client takes the error.
 +
 +			rcu_read_lock();
 +			chan = rcu_dereference(fence->channel);
-+			if (chan && !atomic_xchg(&chan->killed, 1)) {
++			/*
++			 * ⛔ DO NOT call nouveau_fence_context_kill() here.
++			 * nouveau_channel_killed() does, but it runs from an
++			 * nvif notify callback -- a different context. Called
++			 * from inside the wait it re-enters fctx->lock and
++			 * walks the pending list mid-mutation: NULL deref at
++			 * 0x4 after roughly 60 firings. Setting chan->killed
++			 * is enough; pushbuf already checks it.
++			 */
++			if (chan && !atomic_xchg(&chan->killed, 1))
 +				chid = chan->chid;
-+				if (chan->fence)
-+					nouveau_fence_context_kill(chan->fence,
-+								   -ENODEV);
-+			}
 +			rcu_read_unlock();
 +
 +			if (chid >= 0)
