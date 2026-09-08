@@ -41,7 +41,7 @@ fetch() {
 }
 
 rm -rf "$OUT"
-mkdir -p "$OUT/assets" "$OUT/autoconfig"
+mkdir -p "$OUT/assets" "$OUT/autoconfig" "$OUT/info"
 
 fetch retroarch-assets
 # Menu drivers usable on a Linux desktop, plus their fonts and sounds. `src` is
@@ -55,10 +55,27 @@ fetch retroarch-joypad-autoconfig
 tar xzf "$TMP/retroarch-joypad-autoconfig.tar.gz" -C "$OUT/autoconfig" --strip-components=1 \
     --wildcards '*/udev/*' '*/linuxraw/*' 2>/dev/null || true
 
+# ── core info files ─────────────────────────────────────────────────────────
+# ⛔ WITHOUT THESE, THE CONTENT BROWSER SHOWS NO GAMES. RetroArch filters "Load
+# Content" by the file extensions a core declares, and it learns those from the
+# core's .info file -- NOT from the .so. Ship cores without info files and the
+# browser lists directories and nothing else, so a machine with a full ROM
+# folder looks empty. It reads as a broken file manager rather than missing
+# metadata, which is why it is worth stating plainly here.
+#
+# ⚠ Same failure shape as the two above: Void's retroarch ships none of it, and
+# RetroArch's answer is the Online Updater, which is the one thing this machine
+# cannot use.
+fetch libretro-core-info
+tar xzf "$TMP/libretro-core-info.tar.gz" -C "$OUT/info" --strip-components=1 \
+    || { echo "fetch-assets: could not extract core info files" >&2; exit 1; }
+
 n_menu=$(ls "$OUT/assets" 2>/dev/null | wc -l)
 n_pads=$(find "$OUT/autoconfig" -name '*.cfg' 2>/dev/null | wc -l)
 [ "$n_menu" -ge 4 ] || { echo "fetch-assets: only $n_menu asset sets extracted" >&2; exit 1; }
 [ "$n_pads" -ge 100 ] || { echo "fetch-assets: only $n_pads joypad profiles" >&2; exit 1; }
+n_info=$(ls "$OUT/info"/*.info 2>/dev/null | wc -l)
+[ "$n_info" -ge 100 ] || { echo "fetch-assets: only $n_info core info files" >&2; exit 1; }
 
 echo
 echo "  $OUT/assets      $(du -sh "$OUT/assets" | cut -f1)  — $n_menu menu asset sets"

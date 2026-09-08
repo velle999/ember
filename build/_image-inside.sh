@@ -75,6 +75,7 @@ fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm755 /installer/ember-swap /mnt/usr/bin/ember-swap
 install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember-swap.sh
+
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 # ⛔ modesetting + glamor, NOT the legacy nouveau DDX. Xorg autoconfigures
@@ -120,11 +121,27 @@ if [ -d /ra-assets ] && [ -n "$(ls -A /ra-assets 2>/dev/null)" ]; then
     chown -R 0:0 /mnt/usr/share/libretro
     # ⚠ The defaults point into ~/.config/retroarch, which is empty on a new
     # user, so shipping the files is not enough — the config has to name them.
+    # ⛔ THREE PATHS, NOT TWO. libretro_info_path is the one that decides
+    # whether "Load Content" shows any games at all: RetroArch filters the
+    # browser by the extensions a core declares, and it reads those from the
+    # core's .info file. With no info path the browser lists directories and
+    # nothing else, so a full ROM folder looks empty and the file browser looks
+    # broken. Setting it is not optional just because the menu renders without it.
     if [ -f /mnt/etc/retroarch.cfg ]; then
-        sed -i 's|^# *assets_directory =.*|assets_directory = "/usr/share/libretro/assets"|' /mnt/etc/retroarch.cfg
-        sed -i 's|^# *joypad_autoconfig_dir =.*|joypad_autoconfig_dir = "/usr/share/libretro/autoconfig"|' /mnt/etc/retroarch.cfg
+        set_cfg() {   # key, value — replace whether commented, present, or absent
+            sed -i "s|^# *$1 =.*|$1 = \"$2\"|" /mnt/etc/retroarch.cfg
+            sed -i "s|^$1 =.*|$1 = \"$2\"|" /mnt/etc/retroarch.cfg
+            grep -q "^$1 =" /mnt/etc/retroarch.cfg || echo "$1 = \"$2\"" >> /mnt/etc/retroarch.cfg
+        }
+        set_cfg assets_directory     /usr/share/libretro/assets
+        set_cfg joypad_autoconfig_dir /usr/share/libretro/autoconfig
+        set_cfg libretro_info_path   /usr/share/libretro/info
     fi
-    echo "inside: retroarch assets + $(find /mnt/usr/share/libretro/autoconfig -name '*.cfg' 2>/dev/null | wc -l) joypad profiles installed"
+    # ⚠ Prove all three arrived. The assets check used to stand alone, which is
+    # how info files went missing without anything noticing.
+    n_info=$(ls /mnt/usr/share/libretro/info/*.info 2>/dev/null | wc -l)
+    echo "inside: retroarch assets + $(find /mnt/usr/share/libretro/autoconfig -name '*.cfg' 2>/dev/null | wc -l) joypad profiles + $n_info core info files installed"
+    [ "$n_info" -ge 100 ] || echo "inside: WARNING only $n_info core info files - the content browser will show no games" >&2
 fi
 
 
