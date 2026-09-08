@@ -140,7 +140,12 @@ mkdir -p "$ROOTFS"
 # wins. Listed after Void's, xbps resolves the stock package and the whole build
 # silently produces an unpatched image.
 LOCALREPO_ARG=""
-LOCALREPO_DIR="$OUT/${EMBER_ID}-repo-$ARCH"
+# ⚠ NOT "$OUT/..." — in this script $OUT is the ROOTFS directory
+# (out/ember-<ver>-<arch>-<tier>), not the top of out/. Getting that wrong makes
+# the check silently miss the package and print "no patched kernel", which looks
+# identical to never having built one — and the image then ships stock nouveau
+# without complaining. Caught only by reading the build's own output.
+LOCALREPO_DIR="out/${EMBER_ID}-repo-$ARCH"
 if ls "$LOCALREPO_DIR"/linux*.xbps >/dev/null 2>&1; then
     echo "   local   patched kernel found in $LOCALREPO_DIR"
     LOCALREPO_ARG="-R /localrepo"

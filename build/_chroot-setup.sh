@@ -77,6 +77,41 @@ grub)
     # inside a container against the CONTAINER's hardware; a hostonly image made
     # there carries that machine's storage drivers and not the target's, and the
     # failure is a kernel panic on a box with no serial console.
+    # ⚠ nouveau accel_move=1 fence_sema=0 — SET ONLY IF THE MODULE HAS THEM.
+    #
+    # fence_sema=0 is LOAD-BEARING, not an optimisation. Measured on the
+    # reference machine, same kernel and Mesa and vram_pushbuf=0 either way:
+    #
+    #     fence_sema=0   10 rounds of 45s unthrottled glxgears, ZERO errors
+    #     fence_sema=1   two channels dead 16 SECONDS into round 1, Xorg's
+    #                    among them
+    #
+    # ⛔ These parameters exist ONLY on the patched module, and modprobe REFUSES
+    # a module given an unknown parameter — writing them unconditionally into an
+    # image built without the patched kernel leaves the machine with NO graphics
+    # driver at all. So ask the module rather than assuming either way.
+    #
+    # ⚠ THIS MUST RUN BEFORE dracut BELOW. The initramfs carries its own copy of
+    # /etc/modprobe.d, frozen at the moment dracut runs, and nouveau loads FROM
+    # the initramfs — so a file written after dracut has no effect on the next
+    # boot, and editing it on the installed system later has none either.
+    #
+    # ⛔ THIS BLOCK USED TO SKIP THEM UNCONDITIONALLY, with a comment saying the
+    # patched module "does not ship in the image yet". That was true when it was
+    # written and false three hours later, and the result was an image that
+    # booted the patched kernel with fence_sema at its default of 1 — which
+    # crashed the installer's own UI. A condition that reads the module cannot
+    # go stale the way a comment about the future can.
+    KMOD=$(find /usr/lib/modules /lib/modules -name 'nouveau.ko*' 2>/dev/null | head -1)
+    if [ -n "$KMOD" ] && modinfo -p "$KMOD" 2>/dev/null | grep -q '^fence_sema'; then
+        printf 'options nouveau accel_move=1 fence_sema=0\n' > /etc/modprobe.d/nouveau-fix.conf
+        echo "chroot: patched nouveau detected - accel_move=1 fence_sema=0 set"
+        grep -q 'fence_sema=0' /etc/modprobe.d/nouveau-fix.conf || {
+            echo "chroot: nouveau-fix.conf did not take" >&2; exit 1; }
+    else
+        echo "chroot: stock nouveau - accel_move/fence_sema NOT set (they would refuse to load)"
+    fi
+
     dracut --force --no-hostonly
 
     # ⚠ A SERIAL CONSOLE, ON PURPOSE AND SHIPPED. tty0 stays first so a monitor
@@ -135,11 +170,7 @@ grub)
     # not just this card.
     printf 'options ttm dma32_pages_limit=65536\n' > /etc/modprobe.d/ttm-lowmem.conf
 
-    # ⛔ NOT set here: nouveau's accel_move= and fence_sema=. Those parameters
-    # exist only on the patched module in patches/, and modprobe REFUSES a
-    # module given an unknown parameter — writing them into a stock image would
-    # leave the machine with no graphics driver at all. They belong with the
-    # module, and the module does not ship in the image yet.
+
 
     grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
     grub-mkconfig -o /boot/grub/grub.cfg
