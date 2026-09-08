@@ -47,6 +47,18 @@ BASE="https://buildbot.libretro.com/nightly/$BB"
 OUT="cores/$ARCH"
 mkdir -p "$OUT"
 
+# ⚠ THE SECOND ROUND OF GAPS, found by walking a real 180-platform library
+# rather than by listing systems from memory: WonderSwan and WonderSwan Color
+# (mednafen_wswan), Atari Jaguar (virtualjaguar), Game & Watch (gw) and 3DO
+# (opera). All are light enough to be worth having on this hardware.
+#
+# ⚠ Three things in that library have NO core here and it is deliberate:
+# Nintendo DS, 3DS and GameCube. desmume2015 and citra are not built for i686 by
+# the buildbot at all, and even if they were, a 3 GHz Pentium 4 will not run them
+# playably. openbor is likewise not built for i686. Shipping a core that cannot
+# work is worse than not shipping it — it turns "no core" into "it opens and is
+# unplayable", which is harder to diagnose.
+#
 # ⚠ PC ENGINE WAS MISSING and it is not a niche system — a real library turned
 # up 1567 .pce files with no core to run them, which presents as "RetroArch shows
 # my games and then fails to open them". mednafen_pce_fast is the light one, which
@@ -68,6 +80,7 @@ bluemsx cap32 fuse
 vice_x64 vice_x128
 o2em vecx
 atari800 puae
+mednafen_wswan gw virtualjaguar opera
 "
 
 # The fifth and sixth generations — see the note above. Missing ones are
