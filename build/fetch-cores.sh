@@ -47,6 +47,11 @@ BASE="https://buildbot.libretro.com/nightly/$BB"
 OUT="cores/$ARCH"
 mkdir -p "$OUT"
 
+# ⚠ PC ENGINE WAS MISSING and it is not a niche system — a real library turned
+# up 1567 .pce files with no core to run them, which presents as "RetroArch shows
+# my games and then fails to open them". mednafen_pce_fast is the light one, which
+# is the right trade on a Pentium 4; mednafen_supergrafx covers .sgx.
+#
 # ⚠ mame2003_plus IS THE POINT for arcade on this hardware. It is MAME 0.78-era,
 # from when MAME still targeted machines like this one; standalone MAME is 0.282
 # and chases accuracy on hardware two decades newer. fbalpha2012 is beside it
@@ -56,6 +61,7 @@ fceumm nestopia quicknes
 snes9x2010 snes9x
 genesis_plus_gx picodrive
 gambatte mgba
+mednafen_pce_fast mednafen_supergrafx
 stella prosystem handy
 mame2003_plus fbalpha2012
 bluemsx cap32 fuse
