@@ -104,6 +104,15 @@ That builds a real EDID and hands it to the kernel. `EMBER_PI_ROTATE` is
 
 ---
 
+### The patched kernel (optional, and slow)
+
+    build/mk-kernel.sh
+
+Builds `linux6.18` with the nouveau nv4x patches into `out/ember-repo-i686`,
+which `mkrootfs.sh` then installs from. ~40 minutes and it wants 25 GB free —
+it checks first and refuses rather than dying at the last step. Only needed when
+the patches change; images build fine without it.
+
 ## Installing
 
 ```sh
@@ -221,7 +230,31 @@ host running TTM, not just this card. **Ember sets this by default.**
 **4. An unthrottled error-message storm.** The FIFO logs one line per cache entry
 when it drains after an error, with no rate limit. On a single-core machine that
 flood alone is enough to livelock the box —
-`patches/nouveau-nv04-fifo-ratelimit-error-storm.patch`.
+`patches/nouveau-nv04-fifo-ratelimit-and-runout.patch`.
+
+### The fixes ship as a kernel package, not a loose module
+
+`build/mk-kernel.sh` builds a patched `linux6.18` with the four nouveau patches
+applied, and `mkrootfs.sh` installs it if it is present. Verified from the
+package rather than the build log:
+
+```
+parameters:  fence_sema, accel_move
+vermagic:    6.18.49_99 SMP preempt mod_unload 686
+intree:      Y
+```
+
+`intree: Y` is why it is a whole kernel package rather than a hand-built
+`nouveau.ko` dropped over the stock one. An unsigned out-of-tree module arms two
+separate kernel bugs on this hardware: reading `/proc/modules` NULL-derefs in
+`m_show`, so **`lsmod` kills the machine**, and `dracut-install` reads it too, so
+regenerating the initramfs can oops mid-run and leave an unbootable image.
+In-tree removes the taint and both traps, and xbps owns the file afterwards, so
+an ordinary update cannot silently put stock nouveau back.
+
+⚠ It is a long build — around 40 minutes and a 21 GB peak — so it is not part of
+`mkrootfs.sh`. Run it when the patches change. Without it an image still builds
+and boots; it gets `vram_pushbuf=0` and the TTM cap but not `fence_sema=0`.
 
 ⚠ **It is the combination that is stable.** An earlier test of `vram_pushbuf=0`
 on its own, without the other fixes, still wedged — which is exactly why it was
@@ -236,8 +269,13 @@ The fence-semaphore path is shared by every chipset whose FIFO exposes
     NV40 NV41 NV42 NV43 NV44 NV44A NV45 G70 G71 G72 G73
     C51 C61 C67 C68 C73
 
-In retail terms: GeForce4 MX and Ti, the GeForce FX series, GeForce 6, GeForce 7,
-and the nForce integrated parts. Cards older than that (NV04–NV15) use a
+In the names people actually search for: **GeForce4 MX**, **GeForce4 Ti**, the
+**GeForce FX** series (5200, 5500, 5600, 5700, 5800, 5900, 5950), **GeForce 6**
+(6100, 6150, 6200, 6600, 6800), **GeForce 7** (7025, 7050, 7100, 7200, 7300,
+7600, 7800, 7900, 7950), and the **nForce** integrated parts. AGP and PCIe cards
+alike — the fence path does not care which bus it is on.
+
+Cards older than that (NV04–NV15: TNT2, GeForce 256, GeForce2, GeForce3) use a
 different fence path that never had the problem.
 
 ⚠ **Only one has actually been tested** — a GeForce 7600 GS, chipset 0x4b/G73.
@@ -279,11 +317,8 @@ info` in 0.06 s.
 
 ## Not done yet
 
-- **The nouveau patches are not upstream**, and the patched module does not ship
-  in the image yet — it is built by hand on the reference machine. Until it does,
-  a fresh install gets the two kernel parameters and the containment behaviour of
-  stock nouveau, not `fence_sema=0`. Wiring the module into the image build is the
-  next piece of work.
+- **The nouveau patches are not upstream.** They build and they are verified on
+  hardware, but they are carried here, not in Void or in mainline.
 - **One machine, one card.** The nv4x result is verified on a GeForce 7600 GS
   under deliberate load, not across the card list it should apply to.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
