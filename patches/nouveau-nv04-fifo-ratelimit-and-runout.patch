@@ -1,0 +1,71 @@
+Subject: drm/nouveau/fifo/nv04: rate-limit the error storm and acknowledge RUNOUT
+
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+@@ -328,7 +328,13 @@
+ 	if (!(pull0 & 0x00000100) ||
+ 	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
+ 		chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+-		nvkm_error(subdev, "CACHE_ERROR - "
++		/* One interrupt, one cache entry, one printk. Draining a full
++		 * CACHE1 therefore emits hundreds of lines back to back, and on
++		 * a single-core machine with netconsole -- where every line is a
++		 * synchronous UDP packet -- that livelocks the box outright: a
++		 * 4.8s clocksource stall was observed right before it died.
++		 * Rate limit it; the recovery below is what actually matters. */
++		nvkm_error_ratelimited(subdev, "CACHE_ERROR - "
+ 			   "ch %d [%s] subc %d mthd %04x data %08x\n",
+ 			   chid, chan ? chan->name : "unknown",
+ 			   (mthd >> 13) & 7, mthd & 0x1ffc, data);
+@@ -371,7 +377,7 @@
+ 		u32 ib_get = nvkm_rd32(device, 0x003334);
+ 		u32 ib_put = nvkm_rd32(device, 0x003330);
+ 
+-		nvkm_error(subdev, "DMA_PUSHER - "
++		nvkm_error_ratelimited(subdev, "DMA_PUSHER - "
+ 			   "ch %d [%s] get %02x%08x put %02x%08x ib_get %08x "
+ 			   "ib_put %08x state %08x (err: %s) push %08x\n",
+ 			   chid, name, ho_get, dma_get, ho_put, dma_put,
+@@ -387,7 +393,7 @@
+ 		if (ib_get != ib_put)
+ 			nvkm_wr32(device, 0x003334, ib_put);
+ 	} else {
+-		nvkm_error(subdev, "DMA_PUSHER - ch %d [%s] get %08x put %08x "
++		nvkm_error_ratelimited(subdev, "DMA_PUSHER - ch %d [%s] get %08x put %08x "
+ 				   "state %08x (err: %s) push %08x\n",
+ 			   chid, name, dma_get, dma_put, state,
+ 			   nv_dma_state_err(state), push);
+@@ -439,12 +445,28 @@
+ 		nvkm_wr32(device, NV04_PFIFO_CACHE1_PULL0, 1);
+ 	}
+ 
+-	if (device->card_type == NV_50) {
+-		if (stat & 0x00000010) {
+-			stat &= ~0x00000010;
+-			nvkm_wr32(device, 0x002100, 0x00000010);
+-		}
++	/*
++	 * RUNOUT: the FIFO could not load a channel and pushed the request into
++	 * RAMRO instead. It was only ever handled on NV_50, so on nv04-family
++	 * parts it fell through to the catch-all below, which logs once and then
++	 * MASKS THE INTERRUPT OFF PERMANENTLY -- it is never re-enabled outside
++	 * init. Every later runout is then silent, and the channel that was
++	 * pushed out never gets scheduled again, so its fences stop retiring.
++	 *
++	 * Observed on a GeForce 7600 GS: a single "fifo: intr 00000010" and then
++	 * nothing, followed exactly 15s later (the fence deadline) by a channel
++	 * being declared dead, with the desktop losing acceleration behind it.
++	 *
++	 * Acknowledge it here for every card type so the interrupt stays alive
++	 * and repeat occurrences remain visible.
++	 */
++	if (stat & NV_PFIFO_INTR_RUNOUT) {
++		stat &= ~NV_PFIFO_INTR_RUNOUT;
++		nvkm_wr32(device, NV03_PFIFO_INTR_0, NV_PFIFO_INTR_RUNOUT);
++		nvkm_error_ratelimited(subdev, "RUNOUT - ch %d\n", chid);
++	}
+ 
++	if (device->card_type == NV_50) {
+ 		if (stat & 0x40000000) {
+ 			nvkm_wr32(device, 0x002100, 0x40000000);
+ 			nvkm_event_ntfy(&fifo->nonstall.event, 0, NVKM_FIFO_NONSTALL_EVENT);

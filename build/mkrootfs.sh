@@ -129,6 +129,27 @@ if [ -d "$ROOTFS" ]; then
 fi
 mkdir -p "$ROOTFS"
 
+# ── the local repository, if one has been built ─────────────────────────────
+#
+# build/mk-kernel.sh produces a patched linux6.18 whose nouveau carries the nv4x
+# fixes. It is a long build, so it is NOT run here — if the package exists it is
+# installed, and if it does not the image gets Void's stock kernel and works,
+# minus fence_sema=/accel_move=.
+#
+# ⚠ ORDER MATTERS: the local repository is listed FIRST so its higher revision
+# wins. Listed after Void's, xbps resolves the stock package and the whole build
+# silently produces an unpatched image.
+LOCALREPO_ARG=""
+LOCALREPO_DIR="$OUT/${EMBER_ID}-repo-$ARCH"
+if ls "$LOCALREPO_DIR"/linux*.xbps >/dev/null 2>&1; then
+    echo "   local   patched kernel found in $LOCALREPO_DIR"
+    LOCALREPO_ARG="-R /localrepo"
+    LOCALREPO_MOUNT="-v $PWD/$LOCALREPO_DIR:/localrepo"
+else
+    echo "   local   no patched kernel (run build/mk-kernel.sh for the nv4x fixes)"
+    LOCALREPO_MOUNT=""
+fi
+
 # ⛔ XBPS_ARCH IS THE ONLY WAY TO SET THE TARGET ARCHITECTURE, and the mistake
 # worth documenting is the one this line replaced: `xbps-install -A i686`.
 # `-A` LOOKS like --arch and is nothing of the sort — in xbps-install it means
@@ -147,12 +168,13 @@ mkdir -p "$ROOTFS"
 # partway and leaves a rootfs missing exactly the files nothing later checks for.
 docker run --rm --privileged \
     -v "$PWD/$ROOTFS:/rootfs" \
+    $LOCALREPO_MOUNT \
     -e XBPS_ARCH="$ARCH" \
     "$VOID_IMAGE" \
     /bin/sh -euc "
         mkdir -p /rootfs/var/db/xbps/keys
         cp /var/db/xbps/keys/*.plist /rootfs/var/db/xbps/keys/
-        xbps-install -y -S -R '$REPO' -r /rootfs $PKGS
+        xbps-install -y -S $LOCALREPO_ARG -R '$REPO' -r /rootfs $PKGS
         # The download cache is a build artefact, not part of the system: it is
         # the single biggest thing in the tree (1.5 GB on the first build here)
         # and every byte of it is a copy of something already unpacked.

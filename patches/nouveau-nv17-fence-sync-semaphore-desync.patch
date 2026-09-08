@@ -1,76 +1,99 @@
-Subject: drm/nouveau/nv17_fence: don't report a sync that never happened
-
-nv17_fence_sync() chains a GPU semaphore across two channels: the previous
-channel acquires value+0 and releases value+1, the new channel acquires
-value+1 and releases value+2. The semaphore is a single shared location and
-priv->sequence is the global counter that drives it, so the two have to stay
-in step.
-
-The counter was advanced before anything was emitted, each emission was
-conditional on its own PUSH_WAIT succeeding, and the function returned 0
-regardless:
-
-	value = priv->sequence;
-	priv->sequence += 2;
-	ret = PUSH_WAIT(ppush, 5);
-	if (!ret) { ...acquire value+0, release value+1...  }
-	if (!ret && !(ret = PUSH_WAIT(npush, 5))) { ...value+1, value+2... }
-	return 0;
-
-If either PUSH_WAIT fails the counter has still moved, so the semaphore is
-left permanently behind it, and the next sync emits an ACQUIRE for a value
-the semaphore will never reach. The channel that executes that acquire then
-sits with its pushbuf fully fetched (GET == PUT), PGRAPH idle and its fence
-never signalled -- indefinitely, with nothing logged anywhere. Captured on a
-GeForce 7600 GS:
-
-  STALL ch1 gr:status=00000000 ctxctl=0000e001 | put=00521f34 get=00521f34
-  fence deadline: want seq 2, engine at 0 -> engine is genuinely behind
-
-repeated identically while a second channel ran normally beside it.
-
-Returning 0 also tells nouveau_fence_sync() the GPU side is handled, so it
-skips the dma_fence_wait() fallback that would otherwise have been correct.
-
-Reserve room on both channels before consuming a sequence value, and return
-the error. The caller then falls back to a CPU wait, which is slower and
-always right.
-
-NOTE: this does not fix every stall on this hardware. A second, distinct mode
-remains, in which PGRAPH is busy, GET is behind PUT and not advancing, and
-CTX_CONTROL bit 0 is clear -- an engine hung mid-work rather than a channel
-blocked on a semaphore. That one is untouched by this patch.
+Subject: drm/nouveau/nv17_fence: add fence_sema=, and stop reporting sync that never happened
 
 --- a/drivers/gpu/drm/nouveau/nv17_fence.c
 +++ b/drivers/gpu/drm/nouveau/nv17_fence.c
-@@ nv17_fence_sync()
--	spin_lock(&priv->lock);
--	value = priv->sequence;
--	priv->sequence += 2;
--	spin_unlock(&priv->lock);
--
--	ret = PUSH_WAIT(ppush, 5);
--	if (!ret) {
--		...emit on prev...
--	}
--	if (!ret && !(ret = PUSH_WAIT(npush, 5))) {
--		...emit on chan...
--	}
--	mutex_unlock(&cli->mutex);
--	return 0;
+@@ -32,6 +32,10 @@
+ 
+ #include <nvhw/class/cl176e.h>
+ 
++int nouveau_fence_sema = 1;
++module_param_named(fence_sema, nouveau_fence_sema, int, 0400);
++MODULE_PARM_DESC(fence_sema, "use GPU semaphores for cross-channel fence sync (default: 1)");
++
+ int
+ nv17_fence_sync(struct nouveau_fence *fence,
+ 		struct nouveau_channel *prev, struct nouveau_channel *chan)
+@@ -44,30 +48,67 @@
+ 	u32 value;
+ 	int ret;
+ 
++	/*
++	 * nouveau.fence_sema=0 makes this behave like nv10_fence_sync(), which
++	 * simply returns -ENODEV and lets the caller do a CPU wait.
++	 *
++	 * The GPU path makes one channel ACQUIRE a shared semaphore that another
++	 * channel must RELEASE. nouveau_bo_move_m2mf() calls this on the drivers
++	 * own move channel for every accelerated eviction, so if an acquire is
++	 * ever left unsatisfiable that kernel channel blocks forever -- which is
++	 * what channels 0 and 1 dying under eviction pressure looks like.
++	 */
++	if (!nouveau_fence_sema)
++		return -ENODEV;
++
+ 	if (!mutex_trylock(&cli->mutex))
+ 		return -EBUSY;
+ 
++	/*
++	 * Make room on BOTH channels before consuming a sequence value, and
++	 * report failure honestly.
++	 *
++	 * The semaphore is a single shared location and priv->sequence is the
++	 * global counter that drives it, so the two must stay in step. The old
++	 * code advanced the counter first, emitted whatever it could, and then
++	 * returned 0 unconditionally. If either PUSH_WAIT failed, the semaphore
++	 * was left behind the counter for good, and the NEXT sync emitted an
++	 * ACQUIRE for a value the semaphore would never reach -- that channel
++	 * then sat with its pushbuf fully fetched, PGRAPH idle and its fence
++	 * never signalled, forever, with nothing logged anywhere.
++	 *
++	 * Returning the error instead lets nouveau_fence_sync() fall back to a
++	 * CPU wait, which is slower and always correct.
++	 */
 +	ret = PUSH_WAIT(ppush, 5);
 +	if (!ret)
 +		ret = PUSH_WAIT(npush, 5);
 +	if (ret) {
++		/* Not observed to fire in practice; kept because silently
++		 * returning success for work that was never emitted is what
++		 * left the semaphore permanently behind the counter. */
++		pr_err_ratelimited("nouveau: nv17_fence_sync PUSH_WAIT failed (%d) - falling back to CPU wait\n",
++				   ret);
 +		mutex_unlock(&cli->mutex);
 +		return ret;
 +	}
 +
-+	spin_lock(&priv->lock);
-+	value = priv->sequence;
-+	priv->sequence += 2;
-+	spin_unlock(&priv->lock);
+ 	spin_lock(&priv->lock);
+ 	value = priv->sequence;
+ 	priv->sequence += 2;
+ 	spin_unlock(&priv->lock);
+ 
+-	ret = PUSH_WAIT(ppush, 5);
+-	if (!ret) {
+-		PUSH_MTHD(ppush, NV176E, SET_CONTEXT_DMA_SEMAPHORE, fctx->sema.handle,
+-					 SEMAPHORE_OFFSET, 0,
+-					 SEMAPHORE_ACQUIRE, value + 0,
+-					 SEMAPHORE_RELEASE, value + 1);
+-		PUSH_KICK(ppush);
+-	}
+-
+-	if (!ret && !(ret = PUSH_WAIT(npush, 5))) {
+-		PUSH_MTHD(npush, NV176E, SET_CONTEXT_DMA_SEMAPHORE, fctx->sema.handle,
+-					 SEMAPHORE_OFFSET, 0,
+-					 SEMAPHORE_ACQUIRE, value + 1,
+-					 SEMAPHORE_RELEASE, value + 2);
+-		PUSH_KICK(npush);
+-	}
++	PUSH_MTHD(ppush, NV176E, SET_CONTEXT_DMA_SEMAPHORE, fctx->sema.handle,
++				 SEMAPHORE_OFFSET, 0,
++				 SEMAPHORE_ACQUIRE, value + 0,
++				 SEMAPHORE_RELEASE, value + 1);
++	PUSH_KICK(ppush);
 +
-+	...emit on prev, then on chan, unconditionally...
-+	mutex_unlock(&cli->mutex);
-+	return 0;
++	PUSH_MTHD(npush, NV176E, SET_CONTEXT_DMA_SEMAPHORE, fctx->sema.handle,
++				 SEMAPHORE_OFFSET, 0,
++				 SEMAPHORE_ACQUIRE, value + 1,
++				 SEMAPHORE_RELEASE, value + 2);
++	PUSH_KICK(npush);
+ 
+ 	mutex_unlock(&cli->mutex);
+ 	return 0;

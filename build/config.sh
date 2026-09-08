@@ -45,6 +45,14 @@ esac
 # rather than silently at build time.
 KERNEL_I686="linux6.18"
 
+# ⚠ THE EXACT KERNEL VERSION, pinned, because the nv4x patches ship as a REBUILT
+# KERNEL PACKAGE (build/mk-kernel.sh). A module only loads into the kernel it was
+# compiled against — vermagic is checked — so the patched build and the running
+# kernel have to be the same version, not merely the same series. If Void moves
+# linux6.18 past this, mk-kernel.sh stops with the version to bump rather than
+# producing a package that installs and then refuses to load its own nouveau.
+EMBER_KERNEL_VERSION="6.18.49_1"
+
 # Wine is 791 MB and it is the single biggest thing in an i686 image — but
 # running legacy software is a stated requirement of this project, so it is on
 # by default and switched off with EMBER_WINE=0 rather than being opt-in.
