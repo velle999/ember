@@ -83,36 +83,63 @@ grub)
     # still shows everything; ttyS0 mirrors it. On hardware of this era that is
     # a debugging lifeline, and it is what makes the image testable in qemu with
     # no display at all.
-    # ⚠ nouveau.vram_pushbuf=1 — DMA push buffers in VRAM, not GART.
+    # ⛔ nouveau.vram_pushbuf=0 — DMA push buffers in GART, NOT VRAM. This one
+    # parameter is the difference between a desktop that dies every few minutes
+    # and one that does not.
     #
-    # The AGP work above buys bandwidth; this is what makes it survivable. By
-    # default nouveau puts its command push buffers in GART — system RAM reached
-    # across the AGP bridge — so every GPU command crosses the flakiest part of
-    # a board of this era. On the reference machine that wedged Xorg's own
-    # channel within about 107 seconds of boot:
+    # With the push buffers in VRAM the engine intermittently executes garbage
+    # at the FIRST dwords of a freshly created channel's buffer — `get` still at
+    # offset 0 — and the channel is dead from birth:
     #
-    #     nouveau: Xorg[657]: reloc wait_idle failed: -16      (-EBUSY)
-    #     nouveau: gr: [ERROR] DMA_VTX_PROTECTION / PROTECTION_FAULT
+    #     nouveau: fifo: DMA_PUSHER - ch 2 [glxinfo] get 1ceec000 put 1ceec090
+    #                    state 80000000 (err: INVALID_CMD)
+    #     nouveau: channel 2 stopped retiring fences - marking it dead
     #
-    # and the desktop froze with the mouse still moving, because the hardware
-    # cursor keeps drawing while the server is blocked in the kernel. It struck
-    # during MENUS and file browsing rather than in games, which is the tell:
-    # gameplay is 3D and it is the 2D path glamor drives through GL. With the
-    # push buffers in VRAM the same session logged zero faults.
+    # Every GL client was exposed: Xorg, zenity dialogs, RetroArch, Wine. In
+    # GART the CPU writes the buffer through ordinary system memory and the
+    # problem disappears. Measured on the reference machine over one boot:
     #
-    # ⚠ NOT a substitute for the AGP backends above and not the other way round:
-    # without via-agp the GART is 128 MiB and the shortfall lands in system RAM
-    # until the OOM killer takes Xorg; without this the AGP path is fast and
-    # wedges. Both, or neither works.
+    #                              vram_pushbuf=1   vram_pushbuf=0
+    #     DMA_PUSHER                     40                0
+    #     channel stopped retiring       13                0
+    #     gr BAD_ARGUMENT                22                0
+    #     oom-killer                      9                0
     #
-    # Costs a few MB of VRAM. Remove it on a card too small to spare that — the
-    # driver's own default is auto.
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200 nouveau.vram_pushbuf=1"/' /etc/default/grub
+    # under 10 rounds of 45s unthrottled glxgears at ~1100 FPS, 66 glxinfo runs
+    # and repeated ISO mounts — the workload that used to kill it.
+    #
+    # ⚠ It is the COMBINATION that is stable: this plus fence_sema=0 and
+    # accel_move=1 in /etc/modprobe.d. An earlier test of vram_pushbuf=0 alone,
+    # without those, wedged — do not read that as a verdict on this setting.
+    # ⚠ Still NOT a substitute for the AGP backends above: without via-agp the
+    # GART is 128 MiB and the shortfall lands in system RAM until the OOM killer
+    # takes Xorg.
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200 nouveau.vram_pushbuf=0"/' /etc/default/grub
     grep -q '^GRUB_TERMINAL' /etc/default/grub || echo 'GRUB_TERMINAL_OUTPUT="console serial"' >> /etc/default/grub
     echo 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0"' >> /etc/default/grub
 
-    grep -q "nouveau.vram_pushbuf=1" /etc/default/grub || {
+    grep -q "nouveau.vram_pushbuf=0" /etc/default/grub || {
         echo "chroot: vram_pushbuf missing from the kernel cmdline" >&2; exit 1; }
+
+    # ⚠ ttm.dma32_pages_limit — the low-memory brake that never engages.
+    # TTM allocates GFP_DMA32; a 32-bit kernel has no ZONE_DMA32, so those pages
+    # come only from the ~838 MB low zone, and the default limit is roughly that
+    # whole zone — so the brake exists but can never apply. TTM allocates until
+    # the kernel starts killing processes, and on the reference machine it took
+    # Xorg and the whole desktop session with it:
+    #
+    #     Xorg invoked oom-killer: gfp_mask=GFP_USER|GFP_DMA32
+    #       __ttm_pool_alloc -> nouveau_ttm_tt_populate -> ttm_bo_evict
+    #
+    # 65536 pages caps it at 256 MB. Applies to ANY 32-bit host running TTM,
+    # not just this card.
+    printf 'options ttm dma32_pages_limit=65536\n' > /etc/modprobe.d/ttm-lowmem.conf
+
+    # ⛔ NOT set here: nouveau's accel_move= and fence_sema=. Those parameters
+    # exist only on the patched module in patches/, and modprobe REFUSES a
+    # module given an unknown parameter — writing them into a stock image would
+    # leave the machine with no graphics driver at all. They belong with the
+    # module, and the module does not ship in the image yet.
 
     grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
     grub-mkconfig -o /boot/grub/grub.cfg
@@ -224,21 +251,36 @@ if [ "$TIER" = desktop ]; then
     # leaves every one of them unlinked — so a desktop with pipewire installed
     # comes up with NO audio at all and no error anywhere. The symptom is a
     # lone "Dummy Output" sink in `wpctl status` with an empty device list,
-    # which reads like broken hardware rather than a missing symlink. All three
-    # autostart entries are needed: pipewire alone gives a server with no
-    # session manager, and still no devices.
+    # which reads like broken hardware rather than a missing symlink.
+    #
+    # ⛔ EXACTLY ONE STARTUP MECHANISM. There are two ways to start wireplumber
+    # and pipewire-pulse — the conf.d drop-ins, where pipewire spawns them
+    # itself in the right order, and separate XDG autostart entries. Wiring up
+    # BOTH starts wireplumber TWICE, and two session managers race until
+    # neither owns the devices:
+    #
+    #     $ pw-cli ls Device        ->  0
+    #     $ pactl info              ->  Connection failure: Timeout   (30.0s)
+    #     $ wpctl status            ->  hangs, then nothing
+    #
+    # PipeWire's own protocol stays healthy throughout (`pw-cli info 0` answers
+    # instantly), so it reads as a PulseAudio bug rather than a duplicate
+    # daemon. Every pulse client then blocks for 30s on startup — which is what
+    # made RetroArch appear to open a black window with a dead menu.
+    #
+    # Keep the drop-ins, autostart ONLY pipewire.
     mkdir -p /etc/pipewire/pipewire.conf.d /etc/xdg/autostart
     for f in /usr/share/examples/pipewire/20-pipewire-pulse.conf \
              /usr/share/examples/wireplumber/10-wireplumber.conf; do
         [ -f "$f" ] && ln -sf "$f" /etc/pipewire/pipewire.conf.d/
     done
-    for d in pipewire pipewire-pulse wireplumber; do
-        [ -f "/usr/share/applications/$d.desktop" ] &&
-            ln -sf "/usr/share/applications/$d.desktop" "/etc/xdg/autostart/$d.desktop"
-    done
-    # Prove it rather than trusting the loops above.
+    ln -sf /usr/share/applications/pipewire.desktop /etc/xdg/autostart/pipewire.desktop
+    rm -f /etc/xdg/autostart/pipewire-pulse.desktop /etc/xdg/autostart/wireplumber.desktop
+    # Prove it rather than trusting the lines above: one autostart entry, two drop-ins.
     n=$(ls /etc/xdg/autostart/ 2>/dev/null | grep -cE 'pipewire|wireplumber')
-    [ "$n" = 3 ] || { echo "chroot: $n/3 pipewire autostart entries linked" >&2; exit 1; }
+    [ "$n" = 1 ] || { echo "chroot: $n pipewire autostart entries, expected exactly 1" >&2; exit 1; }
+    d=$(ls /etc/pipewire/pipewire.conf.d/ 2>/dev/null | wc -l)
+    [ "$d" = 2 ] || { echo "chroot: $d pipewire conf.d drop-ins, expected 2" >&2; exit 1; }
 
     # ⚠ pipewire must run in the user's SEATED session. Started from an ssh
     # session (no seat) wireplumber claims no devices and produces the same

@@ -11,7 +11,7 @@ Wine. **x86_64 is deliberately not a target.**
 | **Targets** | `i686` (Pentium 4 and later 32-bit x86), `aarch64` (Raspberry Pi 4 / 5) |
 | **Base** | Void Linux — glibc, runit, rolling |
 | **Desktop** | XFCE, or an IceWM tier for ~1 GB machines |
-| **Status** | both targets run on real hardware |
+| **Status** | both targets run on real hardware; the GeForce 7 3D freeze is fixed |
 
 Not a distribution from scratch: a package set, a desktop configuration, an
 image builder and an installer, on top of a base that already does the hard
@@ -29,7 +29,9 @@ x86_64-only or too heavy for 2 GB.
 Tested on a 3.0 GHz Pentium 4 with 2 GB of RAM and a GeForce 7600 GS, and on a
 Raspberry Pi 4:
 
-- **Hardware OpenGL** on the GeForce — `glxgears` at a vsync-locked 60 FPS
+- **Hardware OpenGL** on the GeForce, and **stable under sustained 3D** — the
+  nv4x driver bug that froze the desktop is fixed (see below); ten unthrottled
+  `glxgears` rounds at ~1100 FPS with zero kernel errors
 - **Windows games under Wine**, accelerated: Return to Castle Wolfenstein,
   Quake II, Unreal Tournament 99
 - **Native 3D**: SuperTuxKart
@@ -153,74 +155,79 @@ docs/         development notes
 
 ---
 
-## Known: the GeForce 7's 3D driver is broken, and the desktop survives it
+## The GeForce 7 works — what it took, and what you get
 
-On the reference Pentium 4 (GeForce 7600 GS, `nouveau`'s `nv30`/nv4x driver),
-sustained 3D faults the graphics engine and it stops retiring fences. Every
-waiter then blocks forever, so the desktop appears frozen with the mouse still
-moving. It is **not** the hardware — the same card is stable under Windows XP on
-the same machine.
+**This is the headline result.** `nouveau`'s `nv30`/nv4x driver — the driver for
+every NVIDIA card from the GeForce4 era through the GeForce 7 — could not hold a
+desktop together on this machine. Sustained 3D faulted the graphics engine, it
+stopped retiring fences, and every waiter blocked forever: the desktop froze with
+the mouse still moving. It was never the hardware. The same card is stable under
+Windows XP on the same board.
 
-**Narrowed to indexed VBO draws.** Bisected with mesa-demos: immediate mode,
-client vertex arrays, indexed client arrays and non-indexed VBOs are all clean;
-`vbo-drawelements` faults on every run. That is also why the symptom shows up in
-menus and file browsing rather than in games — glamor, the X server's 2D
-acceleration, draws through indexed VBOs.
+It now runs. On the reference Pentium 4 with a GeForce 7600 GS:
 
-**The cause is in Mesa, not the kernel and not the card.** A pushbuf dump of a
-faulting draw carries relocations for every GPU address in the submission except
-the index buffer's: `IDXBUF_OFFSET` reaches the engine as a bare `0x100`, an
-address too small and too misaligned to be a real buffer. The engine reads
-indices out of unrelated video memory, and those indices send vertex fetches past
-the end of the vertex array — the protection fault.
+| | |
+|---|---|
+| **Hardware OpenGL** | `Accelerated: yes`, renderer `NV4B`, 502 MB |
+| **Unthrottled `glxgears`** | ~1100–1180 FPS, ten consecutive 45-second rounds |
+| **Kernel errors across a full boot** | **zero** — no faults, no channel deaths, no OOM |
+| **Real workload** | Wine games, RetroArch, disc images, YouTube, SuperTuxKart |
 
-`nv30_draw_elements()` binds the index buffer through the buffer context, which is
-what defers its relocation to pushbuf validation. But the only validation an
-indexed draw gets runs earlier, inside `nv30_state_validate()`, so by the time the
-index buffer is bound the relocation for that draw has already been emitted and it
-misses it. The vertex and fragment-program bindings are registered during state
-validation and are covered by it, which is why they alone come back correctly
-relocated in the very same command buffer.
+For comparison, the same machine over a single earlier session, before the fix:
 
-`patches/mesa-nv30-idxbuf-reloc-dropped.patch` takes the driver's other index path
-instead — the inline one that the older chips and user-supplied indices already use,
-which has no index buffer to relocate at all. Measured on the reference machine, the
-protection fault is gone: stock faults on every single run, patched runs fifteen
-consecutive times clean.
+```
+                             before      after
+DMA_PUSHER faults              40          0
+channels "stopped retiring"    13          0
+graphics-engine BAD_ARGUMENT   22          0
+out-of-memory kills             9          0
+```
 
-**The freeze was a second, separate fault, and it is now understood.** Under load the
-engine stopped retiring fences with no error reported anywhere. It turned out to be
-three independent problems stacked on top of each other, each needing its own fix.
+### What it took
 
-### The cross-channel fence semaphore
+Four independent problems, each of which had to be found separately.
 
-`nv17_fence_sync()` synchronises two channels by making one **acquire** a shared GPU
-semaphore that the other must **release**. `nouveau_bo_move_m2mf()` calls it on the
-driver's own buffer-move channel for every accelerated eviction, so an acquire that
-is never satisfied wedges a *kernel* channel — which is exactly what the freeze
-looked like: a channel with its command buffer fully fetched, the graphics engine
-idle, and its fences never signalling, while other channels ran normally beside it.
+**1. The push buffers were in the wrong place.** `nouveau.vram_pushbuf=1` puts the
+GPU command buffer in video memory, behind the AGP aperture. Intermittently the
+engine would execute garbage from the *first dwords* of a freshly created
+channel's buffer — `get` still sitting at offset 0 — so the channel was dead from
+birth and its client died with it:
 
-Older cards never had this. `nv10_fence_sync()` simply returns `-ENODEV` and lets the
-caller wait on the CPU. `nouveau.fence_sema=0` makes the newer path behave the same
-way. It costs a little synchronisation latency and it stops the freeze.
+```
+fifo: DMA_PUSHER - ch 2 [glxinfo] get 1ceec000 put 1ceec090 (err: INVALID_CMD)
+nouveau: channel 2 stopped retiring fences - marking it dead
+```
 
-### The out-of-memory kill
+Every GL client was exposed — the X server, GTK dialogs, RetroArch, Wine. Putting
+the command buffers in GART instead (`nouveau.vram_pushbuf=0`), where the CPU
+writes them through ordinary system memory, ends it. **Ember sets this by
+default.**
 
-TTM asks for `GFP_DMA32` pages. A 32-bit kernel has no `ZONE_DMA32`, so those pages
-can only come from the low-memory zone — about 838 MB on this machine — and the
-default `ttm.dma32_pages_limit` is roughly the size of that whole zone, so the brake
-it exists to apply never engages. TTM allocates until the kernel starts killing
-processes. `ttm.dma32_pages_limit=65536` caps it at 256 MB so it backs off instead.
-This is not specific to this card; it applies to any 32-bit host running TTM.
+**2. A cross-channel fence semaphore.** `nv17_fence_sync()` makes one channel
+*acquire* a shared GPU semaphore that another must *release*, and
+`nouveau_bo_move_m2mf()` calls it on the driver's own buffer-move channel for
+every accelerated eviction — so an acquire that is never satisfied wedges a
+*kernel* channel. Older cards never had this: `nv10_fence_sync()` returns
+`-ENODEV` and waits on the CPU. `nouveau.fence_sema=0` makes the newer path
+behave the same way.
 
-### The error-message storm
+**3. A low-memory brake that could never engage.** TTM asks for `GFP_DMA32`
+pages, and a 32-bit kernel has no `ZONE_DMA32`, so those pages come only from the
+~838 MB low zone — while the default `ttm.dma32_pages_limit` is roughly the size
+of that entire zone. TTM allocated until the kernel started killing processes.
+`ttm.dma32_pages_limit=65536` caps it at 256 MB. This applies to **any** 32-bit
+host running TTM, not just this card. **Ember sets this by default.**
 
-The FIFO reports one line per cache entry when it drains after an error, unlimited.
-On a single-core machine that flood is enough to livelock the box on its own. See
+**4. An unthrottled error-message storm.** The FIFO logs one line per cache entry
+when it drains after an error, with no rate limit. On a single-core machine that
+flood alone is enough to livelock the box —
 `patches/nouveau-nv04-fifo-ratelimit-error-storm.patch`.
 
-### Which cards this applies to
+⚠ **It is the combination that is stable.** An earlier test of `vram_pushbuf=0`
+on its own, without the other fixes, still wedged — which is exactly why it was
+wrongly written off for a while. No single one of these is carrying the result.
+
+### Which cards this should apply to
 
 The fence-semaphore path is shared by every chipset whose FIFO exposes
 `NV17_CHANNEL_DMA` or `NV40_CHANNEL_DMA`:
@@ -230,29 +237,55 @@ The fence-semaphore path is shared by every chipset whose FIFO exposes
     C51 C61 C67 C68 C73
 
 In retail terms: GeForce4 MX and Ti, the GeForce FX series, GeForce 6, GeForce 7,
-and the nForce integrated parts. Cards older than that (NV04–NV15) use a different
-fence path that never had the problem.
+and the nForce integrated parts. Cards older than that (NV04–NV15) use a
+different fence path that never had the problem.
 
-⚠ **Only one of those has actually been tested** — a GeForce 7600 GS, chipset
-0x4b/G73. The rest share the code, which is a reason to suspect they are affected,
-not evidence that they are. Anyone with one of the others is in a position to find
-out, and the switch is a module parameter rather than a rebuild.
+⚠ **Only one has actually been tested** — a GeForce 7600 GS, chipset 0x4b/G73.
+The rest share the code, which is a reason to suspect they are affected, not
+evidence that they are. The switches are kernel parameters rather than a rebuild,
+so anyone with one of the others is in a position to find out cheaply.
 
-**`patches/nouveau-nv4x-kill-hung-channel.patch` stops the machine dying with
-it.** The engine still faults; the driver now notices a fence past its deadline,
-marks the channel dead and returns `-ENODEV`, so the GL program takes the error
-and the desktop keeps running. Verified over 34 firings with no kernel oops.
+⚠ **What "fixed" is worth here.** This is one machine, verified under deliberate
+load — ten unthrottled `glxgears` rounds, 66 GL client launches, repeated disc
+mounts — not a fleet over months. The patches in `patches/` are not upstream.
 
-⚠ It is containment, not a cure. There is no engine reset, so once 3D has faulted
-it stays dead until reboot. Ordinary 2D use — desktop, menus, file manager,
-browser — is unaffected.
+### Containment, kept
+
+`patches/nouveau-nv4x-kill-hung-channel.patch` stays in place regardless. If the
+engine ever does fault, the driver notices a fence past its deadline, marks the
+channel dead and returns `-ENODEV`, so the GL program takes the error and the
+desktop keeps running instead of blocking forever. Verified over 34 firings with
+no kernel oops. It is a seatbelt, not a cure — there is no engine reset, so 3D
+stays dead until reboot.
+
+## Audio: install pipewire, get exactly one session manager
+
+Void ships pipewire's daemons, autostart entries and config fragments all
+unlinked, so a desktop with pipewire installed comes up silent. There are two
+ways to start `wireplumber` and `pipewire-pulse` — pipewire's own `conf.d`
+drop-ins, or separate XDG autostart entries — and wiring up **both** starts
+wireplumber twice. Two session managers race, neither ends up owning the
+devices, and every PulseAudio client then blocks for 30 seconds before failing:
+
+```
+$ pw-cli ls Device    ->  0
+$ pactl info          ->  Connection failure: Timeout   (30.0s)
+```
+
+PipeWire's native protocol stays healthy the whole time, so it presents as a
+PulseAudio problem rather than a duplicate daemon. Ember wires up the drop-ins
+and autostarts `pipewire` alone: one session manager, devices present, `pactl
+info` in 0.06 s.
 
 ## Not done yet
 
-- **The engine stops retiring fences under sustained 3D, and nothing says why.**
-  This is what freezes the desktop. No fault, no error — the first line in the log
-  is the containment patch noticing a fence past its deadline. Everything tunable
-  has been tried. This is the open problem.
+- **The nouveau patches are not upstream**, and the patched module does not ship
+  in the image yet — it is built by hand on the reference machine. Until it does,
+  a fresh install gets the two kernel parameters and the containment behaviour of
+  stock nouveau, not `fence_sema=0`. Wiring the module into the image build is the
+  next piece of work.
+- **One machine, one card.** The nv4x result is verified on a GeForce 7600 GS
+  under deliberate load, not across the card list it should apply to.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.

@@ -986,3 +986,87 @@ observed once, including during a stall), pushbuf space accounting (`BEGIN_NV04`
 sits on `CP_END`, which means finished), `nouveau.vram_pushbuf`, and the FIFO runout
 interrupt, which does occur and is now acknowledged rather than silently masked off,
 but has not recurred since.
+
+## ✅ RESOLVED: the nv4x freeze — `nouveau.vram_pushbuf=0` (2026-09-07)
+
+The open problem in the sections above is closed. Everything below supersedes the
+"nothing tunable fixes it" conclusion; the notes are kept because the eliminations
+in them are still valid and cost real time to establish.
+
+**The fix is `nouveau.vram_pushbuf=0`, together with `fence_sema=0`,
+`accel_move=1` and `ttm.dma32_pages_limit=65536`.**
+
+Measured across one boot on the reference machine, same module, same Mesa:
+
+```
+                             vram_pushbuf=1   vram_pushbuf=0
+DMA_PUSHER                          40               0
+channel "stopped retiring"          13               0
+gr BAD_ARGUMENT                     22               0
+oom-killer                           9               0
+ttm_bo_move_sync WARNING            27               0
+failed to idle channel               6               0
+```
+
+Load applied: 10 rounds of 45s unthrottled `glxgears` (~1100–1180 FPS, Xorg alive
+through all ten, including round 6 where an earlier configuration had wedged), 66
+`glxinfo` launches, zenity churn, and three mounts of a real disc image — the
+trigger that reproduced the failure in daily use.
+
+### What the signature was actually telling us
+
+Every fault was the **first submission on a fresh channel**, with `get` still at
+pushbuf offset 0 and `put` at 0x90:
+
+```
+ch 2 [glxinfo]      get 1ceec000 put 1ceec090 INVALID_CMD
+ch 2 [pavucontrol]  get 14143000 put 14143090 INVALID_CMD
+ch 5 [explorer.exe] get 1fb7f000 put 1fb7f090 INVALID_CMD
+```
+
+A healthy first push is 0xf0 bytes and byte-identical across runs. The engine was
+reading something other than what the CPU had written, at the very start of a
+buffer — which is what a command buffer in VRAM behind the AGP aperture looks like
+when the write does not land. In GART the CPU writes it through ordinary system
+memory and it stops.
+
+### ⛔ Why this was written off earlier, and the lesson
+
+An earlier entry recorded `vram_pushbuf=0` as "TESTED AND ELIMINATED — survived
+five glxgears rounds, wedged on the sixth". That test ran **before** the module
+carried `fence_sema=0`/`accel_move=1`, so it was measuring a different machine and
+the verdict did not transfer. A negative result is only valid against the
+configuration it was measured on; record that configuration with it.
+
+### ⛔ Theories that looked strong and were wrong
+
+Kept because each cost time and each would look plausible again:
+
+- **Low-memory exhaustion.** Faults occur at 210 MB LowFree as readily as at 69 MB.
+- **`vm.min_free_kbytes`.** Raising it produced 10 clean runs, then the same fault.
+  It reserves pages in the one zone TTM must allocate from; not a fix either way.
+- **"VRAM fills up over time."** A pushbuf faulted at 434 MB with 401 MB of 502 MB
+  still free. Placement is not driven by occupancy.
+- **The BAR1 aperture (256 MB) and the AGP aperture.** Pushbufs are GART-resident
+  (domain 0x2) and the AGP aperture is correctly sized — `512M @ 0xc0000000`,
+  matching nouveau's `GART: 512 MiB`. Address magnitude means nothing here.
+- **The RUNOUT ack patch.** Suspected of discarding drawing commands. RUNOUT never
+  fired in any capture; it is neither exercised nor refuted.
+
+### The RetroArch "black box menu" was never the GPU
+
+It was a 30-second PulseAudio connect timeout blocking startup before the first
+menu frame — see the audio section in the README. `audio_driver=pulse` reached the
+menu at t≈35s, `alsa` at t≈5s, with the kernel log silent throughout.
+
+## Two traps worth keeping
+
+⛔ **`lsmod` takes this machine down.** Reading `/proc/modules` NULL-derefs in
+`m_show` while an unsigned out-of-tree module is loaded — the same defect that
+oopses `dracut-install`. It is the first thing in a habitual "check the box"
+one-liner and it kills the machine before anything else runs. Read
+`/sys/module/<name>/` instead.
+
+⛔ **A dead netconsole listener looks exactly like a clean kernel log.** The
+receiver is an ordinary process and it can die silently. Before treating silence
+as evidence, check that the listener is alive and that the log's mtime is recent.
