@@ -52,6 +52,25 @@ for p in patches/nouveau-*.patch; do
         exit 1; }
 done
 
+# ⛔ CHECK THE DISK BEFORE STARTING. This build peaks around 21 GB — a 15 GB
+# kernel tree in the masterdir plus a multi-GB -dbg package — and it spends
+# roughly 40 minutes getting there. Running out at the END means the compile
+# succeeded and the .xbps could not be written:
+#
+#     xbps-create: ERROR: No space left on device
+#     => ERROR: Failed to created binary package: linux6.18-...xbps!
+#
+# and it takes the whole filesystem to 0 bytes on the way, which breaks
+# everything else running on the machine. Fail here instead, cheaply.
+NEED_GB=25
+FREE_GB=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
+if [ "${FREE_GB:-0}" -lt "$NEED_GB" ]; then
+    echo "mk-kernel: needs ~${NEED_GB}G free, have ${FREE_GB}G" >&2
+    echo "           the build peaks ~21G and dies at the last step without it" >&2
+    exit 1
+fi
+echo "   disk    ${FREE_GB}G free (needs ~${NEED_GB}G)"
+
 mkdir -p "$WORK" "$OUT"
 
 # ⚠ void-packages is a big checkout; keep it shallow and reuse it.
@@ -117,7 +136,12 @@ docker run --rm --privileged \
         # build user is created with that uid rather than chown-ing a 23k-file
         # checkout on every run.
         su \$BU -c 'cd /void-packages && ./xbps-src binary-bootstrap && ./xbps-src -j'\$(nproc)' pkg $SRCPKG'
-        find /void-packages/hostdir/binpkgs -name '*.xbps' -exec cp -v {} /out/ \;
+        # ⚠ NOT the -dbg package. Kernel debug symbols are 1.8 GB — fourteen
+        # times the kernel itself — and mkrootfs.sh bind-mounts this directory
+        # into every image build. It is a build artefact, not something an
+        # image should carry or a laptop should copy around.
+        find /void-packages/hostdir/binpkgs -name '*.xbps' ! -name '*-dbg-*' \
+             -exec cp -v {} /out/ \;
     "
 
 echo "   index   rebuilding repository metadata"
