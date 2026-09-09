@@ -1,0 +1,105 @@
+nv30: count GART transfer temporaries and miptrees, to attribute the leak
+
+DIAGNOSTIC ONLY. Not for shipping, not upstream material.
+
+The X server leaks GPU-backed memory on nv30 at about 38 MB/s while anything
+animates -- measured on a GeForce 7600, where a screensaver takes the session
+down in two minutes. It is not glamor: the identical server and screensaver on
+llvmpipe leak 2 MB in 60 seconds. It is not the fence-deferred free path:
+NOUVEAU_DISABLE_FENCES=1 changes nothing. The pages are ~92% zeros and are
+released only when the X server exits.
+
+This counts the two allocation sites in nv30_miptree.c -- the per-transfer GART
+temporary in nv30_miptree_transfer_map, and the VRAM miptree itself -- against
+their frees, and prints a running balance to stderr every 512 transfers. For
+the X server that lands in /var/log/Xorg.0.log.
+
+Enable with NV30_LEAK_TRACE=1. Unset, it costs one comparison per transfer.
+
+--- a/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
++++ b/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
+@@ -35,6 +35,43 @@
+ #include "nv30/nv30_transfer.h"
+ #include "nv30/nv30_winsys.h"
+ 
++/* ── EMBER DIAGNOSTIC INSTRUMENTATION, NOT FOR SHIPPING ──────────────────────
++ *
++ * Counts the GART transfer temporaries and the VRAM miptrees this driver
++ * allocates and frees, so a leak shows up as a growing "outstanding" figure
++ * rather than as Shmem climbing with no attribution. Output goes to stderr,
++ * which for the X server means /var/log/Xorg.0.log.
++ *
++ * Enable with NV30_LEAK_TRACE=1; costs nothing when unset.
++ */
++#include <stdio.h>
++#include <stdlib.h>
++static unsigned long ember_tx_alloc, ember_tx_free_now, ember_tx_free_fenced;
++static unsigned long long ember_tx_bytes_alloc, ember_tx_bytes_free;
++static unsigned long ember_mt_alloc, ember_mt_free;
++static int ember_trace = -1;
++
++static void
++ember_leak_report(void)
++{
++   if (ember_trace < 0)
++      ember_trace = getenv("NV30_LEAK_TRACE") ? 1 : 0;
++   if (!ember_trace)
++      return;
++   if ((ember_tx_alloc % 512) != 0)
++      return;
++   fprintf(stderr,
++           "nv30-leak: tx map=%lu unmap_now=%lu unmap_fenced=%lu outstanding=%ld | "
++           "GART alloc=%lluMB freed=%lluMB held=%lldMB | miptree new=%lu del=%lu live=%ld\n",
++           ember_tx_alloc, ember_tx_free_now, ember_tx_free_fenced,
++           (long)(ember_tx_alloc - ember_tx_free_now - ember_tx_free_fenced),
++           ember_tx_bytes_alloc >> 20, ember_tx_bytes_free >> 20,
++           (long long)((ember_tx_bytes_alloc - ember_tx_bytes_free) >> 20),
++           ember_mt_alloc, ember_mt_free, (long)(ember_mt_alloc - ember_mt_free));
++   fflush(stderr);
++}
++/* ─────────────────────────────────────────────────────────────────────────── */
++
+ static inline unsigned
+ layer_offset(struct pipe_resource *pt, unsigned level, unsigned layer)
+ {
+@@ -73,6 +110,7 @@
+ {
+    struct nv30_miptree *mt = nv30_miptree(pt);
+ 
++   ember_mt_free++;
+    nouveau_bo_ref(NULL, &mt->base.bo);
+    FREE(mt);
+ }
+@@ -317,6 +355,10 @@
+       return NULL;
+    }
+ 
++   ember_tx_alloc++;
++   ember_tx_bytes_alloc += (unsigned long long)tx->base.layer_stride * tx->base.box.depth;
++   ember_leak_report();
++
+    tx->tmp.domain = NOUVEAU_BO_GART;
+    tx->tmp.offset = 0;
+    tx->tmp.pitch  = tx->base.stride;
+@@ -394,9 +436,13 @@
+       }
+ 
+       /* Allow the copies above to finish executing before freeing the source */
++      ember_tx_free_fenced++;
++      ember_tx_bytes_free += (unsigned long long)tx->base.layer_stride * tx->base.box.depth;
+       nouveau_fence_work(nv30->base.fence,
+                          nouveau_fence_unref_bo, tx->tmp.bo);
+    } else {
++      ember_tx_free_now++;
++      ember_tx_bytes_free += (unsigned long long)tx->base.layer_stride * tx->base.box.depth;
+       nouveau_bo_ref(NULL, &tx->tmp.bo);
+    }
+    pipe_resource_reference(&ptx->resource, NULL);
+@@ -494,6 +540,7 @@
+       size = mt->layer_size * 6;
+    }
+ 
++   ember_mt_alloc++;
+    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 256, size, NULL, &mt->base.bo);
+    if (ret) {
+       FREE(mt);

@@ -1,0 +1,39 @@
+nv30: release the resource reference in surface_del
+
+nv30_miptree_surface_new() takes a reference on the resource it wraps:
+
+    pipe_resource_reference(&ps->texture, pt);
+
+and nv30_miptree_surface_del() frees the surface without dropping it. Every
+render target surface therefore leaks one reference on its miptree, the
+resource never reaches refcount zero, nv30_miptree_destroy() never runs, and
+the texture memory is never released.
+
+nv50_surface_destroy() in the sibling driver has the missing line, immediately
+before the same FREE(). nv30 is simply missing it.
+
+Measured on a GeForce 7600 AGP with Xorg 21.1.24 + glamor, instrumenting the
+create/destroy pair: while a screensaver animated, miptree new=16782
+del=14717, live climbing 1359 -> 1475 -> 1619 -> 1809 -> 2065 and never
+falling, at roughly 150-250 leaked per 512 texture transfers. The transfer
+path over the same window was exactly balanced (10240 mapped, 10239 unmapped,
+0 MB held), which is what pointed at the surface refcount rather than the
+allocator.
+
+The user-visible effect is that the X server grows by about 38 MB/s whenever
+anything animates -- the memory is only returned when X exits. On a 2 GB
+machine a blank screensaver exhausts memory in roughly two minutes, and the
+session dies either to the OOM killer or to a null dereference in
+glamor_create_pixmap() when an allocation finally fails. Identical hardware
+and X server on llvmpipe leaks 2 MB in 60 seconds.
+
+--- a/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
++++ b/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
+@@ -577,6 +577,7 @@
+ static void
+ nv30_miptree_surface_del(struct pipe_context *pipe, struct pipe_surface *ps)
+ {
++   pipe_resource_reference(&ps->texture, NULL);
+    FREE(ps);
+ }
+ 
