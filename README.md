@@ -373,6 +373,53 @@ desktop keeps running instead of blocking forever. Verified over 34 firings with
 no kernel oops. It is a seatbelt, not a cure — there is no engine reset, so 3D
 stays dead until reboot.
 
+## Graphics drivers: which one you get
+
+Ember ships two graphics stacks and picks one at boot from the card it finds.
+
+| Card | Driver | X server |
+|---|---|---|
+| NVIDIA, in 304.137's supported list | proprietary **304.137** | xorg-server 1.19, under `/opt/x11-19` |
+| NVIDIA, outside it (GeForce FX and older) | nouveau | the system X server |
+| AMD / ATI | radeon | the system X server |
+| Intel | i915 | the system X server |
+| anything else | modesetting | the system X server |
+
+On a supported NVIDIA card the proprietary driver is the **default**, because on
+this hardware it is the better one: video that syncs at 360p where nouveau
+manages 144p, and none of the intermittent drawing artefacts nouveau shows on
+nv4x. nouveau is the fallback, and it is what runs everywhere else.
+
+lightdm starts whichever X server matches, through `/usr/libexec/ember-xserver`.
+That matters beyond driver choice: because lightdm owns the server, the session
+is registered on `seat0`, which is what lets you reboot, shut down and suspend
+without being asked for a password.
+
+To override the choice:
+
+```sh
+ember-gpu                 # what is running, what is configured, what would be detected
+ember-gpu nvidia          # force the proprietary stack
+ember-gpu nouveau         # force the open driver
+ember-gpu auto            # back to detection (the default)
+```
+
+The setting applies on the next boot.
+
+⛔ **The proprietary driver arms a kernel bug, and you need to know about it.**
+`nvidia.ko` is unsigned and out-of-tree, and on this hardware that is the
+condition where reading `/proc/modules` crashes the machine. While it is loaded:
+
+- `lsmod` will kill the box
+- so will anything that runs `dracut` — **including a kernel upgrade**
+
+Switch to nouveau before upgrading a kernel. Neither way out needs a working
+desktop:
+
+- at the GRUB menu press `e`, append `ember.gpu=nouveau` to the `linux` line,
+  `Ctrl+X` to boot
+- or log in on a text console (`Ctrl+Alt+F2`) and run `ember-gpu nouveau`
+
 ## Audio: install pipewire, get exactly one session manager
 
 Void ships pipewire's daemons, autostart entries and config fragments all

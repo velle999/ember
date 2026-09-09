@@ -130,9 +130,17 @@ is an unsigned out-of-tree module, and on this machine that is exactly the
 condition under which reading `/proc/modules` NULL-derefs in `m_show` — see
 [[reference_dracut_oops_on_proc_modules]]. Once the module is loaded, `lsmod`
 kills the box and so does anything invoking `dracut`. It is why `mk-kernel.sh`
-builds the nouveau patches in-tree rather than shipping a loose `.ko`, and it is
-the strongest argument against making 304 anything other than an explicit,
-warned, opt-in.
+builds the nouveau patches in-tree rather than shipping a loose `.ko`.
+
+⚠ **This was the argument for keeping 304 opt-in, and it was overruled on
+2026-09-09 — deliberately, not by forgetting it.** The hazard is unchanged and
+is now armed on every boot of an NVIDIA machine: `lsmod` and anything invoking
+`dracut` — *including a kernel upgrade* — take the box down. What changed is the
+weight on the other side: 304 is measurably faster on this card (360p video
+sync against nouveau's 144p) and does not show the intermittent drawing
+artefacts nouveau produces on nv4x. The mitigation is that neither escape hatch
+needs a desktop: `ember.gpu=nouveau` appended at the GRUB prompt, or
+`ember-gpu nouveau` from a text console. Run one before upgrading a kernel.
 
 ### The old text, kept because it was wrong in an instructive way
 
@@ -150,12 +158,29 @@ carrying its own X server for the i686 tier is a legitimate choice rather than
 an absurd one. It is a project-direction call, and it is the only thing left in
 the way.
 
-### The fallback, if nouveau ever stops being worth it
+### Where this landed
 
-⚠ **DECIDED 2026-09-09: stay on nouveau + 6.18 for now.** Considerable work is
-already banked there — the nv4x freeze fix, the patched kernel, two Mesa
-patches — and switching would trade a working stack for rebuilding graphics and
-X from the driver up. This section is the escape route, not a plan.
+⚠ **DECIDED 2026-09-09, then revised the same day.** The first decision was to
+stay on nouveau because considerable work was banked there — the nv4x freeze
+fix, the patched kernel, two Mesa patches — and switching looked like trading a
+working stack for rebuilding graphics from the driver up.
+
+⛔ **THE REVISION DID NOT REQUIRE THAT TRADE, WHICH IS WHY IT WAS AFFORDABLE.**
+Both stacks ship. `ember-gpu-detect` reads the boot VGA device and picks one at
+boot: an NVIDIA card in 304's supported list gets the proprietary stack, and
+everything else — unsupported NVIDIA, Radeon, Intel — gets the in-kernel driver
+and the system X server. The kernel stays `linux6.18` and every nouveau and Mesa
+patch stays in it, because they are what the fallback path runs on. Nothing was
+deleted to make room.
+
+⛔ **THE SUPPORTED-ID LIST IS NOT OPTIONAL AND NOT GUESSABLE.** 304 drives NV4x
+through GT2xx. The driver's own `html/supportedchips.html` documents that, but
+it *also* lists the GPUs belonging to the 173.14.xx, 96.43.xx and 71.86.xx
+branches in the same appendix — in 2-column tables rather than 3-column ones. A
+sweep of every `0x####` in that page picks up a GeForce FX 5200 and sends every
+FX card down a path where the X server exits at startup. `mk-nvidia304.sh`
+generates the list from the 3-column tables only and refuses to write a list
+that contains `0x0322` or omits `0x02e1`.
 
 ⛔ **AND IF IT IS EVER TAKEN, DROP THE KERNEL IN THE SAME MOVE.** The two
 choices are coupled and the current pairing is the awkward one:
@@ -201,8 +226,11 @@ machine does not need to be online.
 The cheap first step is a container build of 304.137 against 6.18 headers. It
 answers gate 1 with no risk to the machine, and costs nothing but build time.
 
-Until that is done, nouveau is what Ember ships — by measurement, not because
-the alternative was ruled out.
+⚠ That step was taken, both gates passed, and 304 is now the default on a
+supported NVIDIA card. nouveau remains what Ember ships on everything else, and
+remains the fallback whenever `nvidia.ko` is absent or will not load — a case
+`ember-gpu-apply` handles by loading nouveau and recording that it did, so the X
+wrapper starts the server matching the driver that is actually running.
 
 **nouveau is three drivers wearing one name**, and which one a card lands on is
 the whole question:

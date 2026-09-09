@@ -1301,3 +1301,68 @@ one-liner and it kills the machine before anything else runs. Read
 ⛔ **A dead netconsole listener looks exactly like a clean kernel log.** The
 receiver is an ordinary process and it can die silently. Before treating silence
 as evidence, check that the listener is alive and that the log's mtime is recent.
+
+## ✅ RESOLVED: "it asks for a password to reboot, and to sleep" (2026-09-09)
+
+The desktop demanded authentication for reboot, shutdown and suspend. It reads
+like a hardened polkit policy, and it was not: nothing in the image is hardened,
+and the stock policy is entirely permissive.
+
+### The measurement that found it
+
+polkit grants `org.freedesktop.login1.*` on `allow_active`, and **"active" means
+a session elogind has put on a seat**. Asking polkit directly, as the same user,
+for the same actions, from two different sessions:
+
+```
+seat0 session (started by lightdm)     pkcheck reboot  -> rc=0, authorised
+seatless session (started by su)       pkcheck reboot  -> auth_admin_keep
+```
+
+That is the whole bug. ⚠ `pkcheck` takes `--process pid,start-time`; a bare pid
+is accepted and is the unsafe form. ⛔ And read its exit status directly —
+`pkcheck ... | sed` reports **sed's** status, which made a first run look like
+"authorised" for every action including the failing ones.
+
+### Why one session had no seat
+
+`ember-gpu` used to start the NVIDIA 304 desktop by hand:
+
+```sh
+su - ember -c "env DISPLAY=:2 ... dbus-run-session xfce4-session"
+```
+
+`su` opens no elogind login session, and nothing set `XDG_SEAT`/`XDG_VTNR`, so
+that desktop was never registered on a seat. lightdm's session is, because
+lightdm runs PAM and passes `-seat seat0` to the X server.
+
+⛔ **THE FIX IS NOT A POLKIT RULE.** Adding one would have papered over a session
+that is genuinely not a local login. lightdm now starts *both* X servers through
+`installer/ember-xserver`, which picks the binary and passes lightdm's own
+arguments through untouched — so the 304 desktop is a real seat0 session and
+needs no rule at all.
+
+### Four things eliminated on evidence first
+
+Worth recording because each looked plausible and cost a probe:
+
+- **A missing admin rule.** `50-default.rules` is present and grants
+  `unix-group:wheel`; ember is in wheel. ⚠ An unprivileged `cat` of
+  `/usr/share/polkit-1/rules.d/` fails silently — the directory is `0700` — which
+  made it *look* absent.
+- **polkit built without elogind.** It links `libelogind.so.0`, and elogind
+  exports both `sd_pid_get_session` and `sd_session_is_active`.
+- **xfce4-screensaver locking.** `/lock/enabled` is `false`.
+- **A block inhibitor forcing the `-ignore-inhibit` actions** (the only ones
+  that are `auth_admin_keep`). The only block-mode inhibitor is
+  xfce4-power-manager on `handle-power-key`/`handle-lid-switch`, which is normal
+  and does not gate a reboot request. Every sleep inhibitor is `delay`.
+
+### Unrelated, found on the way: suspend never worked properly either
+
+`/sys/power/mem_sleep` reads `[s2idle] shallow` — **there is no `deep`**, so S3
+suspend-to-RAM is not on offer and the machine falls back to s2idle, which on
+2003 hardware powers almost nothing down. This is a firmware setting, not
+software: P4-era boards call it *ACPI Suspend Type* and frequently ship set to
+`S1 (POS)` instead of `S3 (STR)`. If `deep` appears in that file after changing
+it, S3 is available.
