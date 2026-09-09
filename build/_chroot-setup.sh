@@ -16,7 +16,13 @@ set -euo pipefail
 
 # ⛔ NOT `2>/dev/null || true`. If the account cannot be created there is no
 # point continuing to build an image nobody can log into.
-useradd -m -G wheel,audio,video,input -s /bin/bash "$USERNAME"
+# ⛔ cdrom IS NOT OPTIONAL ON THIS MACHINE. /dev/sr0, /dev/sr1 and vhba's
+# /dev/vhba_ctl are all root:cdrom 0660, so without it xfburn cannot write to
+# either DVD drive and cdemu cannot open its control device -- and cdemu fails
+# with a D-Bus error that says nothing about permissions. The reference machine
+# has two optical drives and this distribution ships as a disc image, so burning
+# and mounting discs is the point rather than an extra.
+useradd -m -G wheel,audio,video,input,cdrom -s /bin/bash "$USERNAME"
 
 # ⛔ -c SHA512, AND IT IS THE WHOLE BUG. This rootfs has no ENCRYPT_METHOD line
 # in /etc/login.defs, so shadow 4.8.1 falls back to a crypt method modern

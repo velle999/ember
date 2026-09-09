@@ -39,6 +39,47 @@ thunar-archive-plugin
 # working perfectly and has nothing to show. The only route to the data was a
 # manual mount as root.
 gvfs
+# ⛔ gvfs ALONE CANNOT SEE AN SMB SHARE. The backends are separate packages, so
+# a desktop with gvfs but not gvfs-smb shows an EMPTY "Network" in Thunar — not
+# an error, just nothing, which reads as "the share is down" rather than "this
+# machine cannot speak SMB".
+gvfs-smb
+# ⛔ XFCE BINDS Print Screen TO A TOOL IT DOES NOT PULL IN. The stock
+# xfce4-keyboard-shortcuts.xml already maps Print, Alt+Print and Shift+Print to
+# `xfce4-screenshooter`, `-w` and `-r` — but the package is separate, so a
+# default desktop has three shortcuts pointing at a binary that is not there.
+# The same shape as gvfs-smb below: the configuration ships, the thing it
+# configures does not.
+xfce4-screenshooter
+# ⛔ XFCE ALSO BINDS Ctrl+Alt+Escape TO xkill AND DOES NOT PULL IT IN. 19 KB, and
+# on a machine where a GL client can wedge the whole session it is the
+# difference between killing one window and power-cycling the box.
+xkill
+# ⚠ unzip ships but zip did not — an asymmetry nobody chooses on purpose, and
+# the kind of thing you only discover when you try to send a file back.
+zip
+# ⚠ Thunar's "Extract here" and "Compress" context entries need a GUI archiver
+# to exist; without one they are absent, not broken, so nothing tells you why.
+xarchiver
+# ⛔ RAR NEEDS unar, AND NOT THE NONFREE unrar. Old game archives are commonly
+# RAR, and Void's own nonfree repo carries no unrar for i686 at all -- so that
+# route is closed regardless of how one feels about nonfree. unar is The
+# Unarchiver's CLI, in main, and covers MORE of what matters here than unrar
+# does: RAR (including RAR5), StuffIt, ARJ, LZH, CAB, ACE, and 7z.
+#
+# ⚠ 19 MB installed, most of it gnustep-base, which is more than it looks on the
+# tin (the package itself is 5 MB). Judged worth it for a machine whose whole
+# purpose is opening decades-old archives.
+unar
+# ⚠ The reference machine has two DVD drives and this distribution ships as an
+# ISO, so a burner is not an optional extra here. xfburn is the XFCE one and
+# pulls no GNOME stack.
+xfburn
+# ⚠ AND gvfs IS NOT ENOUGH FOR GAMES. A gvfs mount lives under
+# /run/user/<uid>/gvfs on a FUSE path; plenty of emulators and DOS front-ends
+# cannot open files there. cifs-utils gives a real kernel mount with ordinary
+# paths, which is what RetroArch and DOSBox-X need to load anything.
+cifs-utils
 udisks2
 # ⛔ kbd, for chvt/fgconsole. ember-gpu tells the user to `chvt 8` to reach the
 # alternate X server and the command was not on the image — the instruction was

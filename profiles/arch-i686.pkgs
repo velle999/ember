@@ -12,6 +12,18 @@
 # package by hand rather than putting it back here for everyone.
 dracut
 grub
+# ⛔ RADEON KMS DOES NOT WORK WITHOUT ITS FIRMWARE, and the "no firmware
+# package" rule above is about NETWORK cards -- it does not hold for video.
+# nouveau on nv4x carries its microcode inside the driver, which is why the
+# reference machine never needed this and the gap went unnoticed; radeon needs
+# radeon/*.bin from R300 onward and for everything R600+. Without it radeon.ko
+# never brings up KMS, so there is no /dev/dri/card0, so seat0 is not graphical,
+# so lightdm waits for ever at "Monitoring logind for seats" -- a dead screen
+# with nothing in any log. That is the same failure the NVIDIA path had.
+#
+# ⚠ 32 MB, not the 668 MB the comment above is worried about: that figure is
+# dominated by linux-firmware-network at 442 MB, which is still excluded.
+linux-firmware-amd
 #
 # ⚠ THE VIDEO DRIVERS ARE NAMED, NOT METAPACKAGED. A Pentium 4 has whatever GPU
 # it shipped with, and which one decides whether there is any acceleration at

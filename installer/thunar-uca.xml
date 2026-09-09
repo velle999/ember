@@ -72,4 +72,13 @@
 	<patterns>*.exe;*.EXE</patterns>
 	<other-files/>
 </action>
+	<action>
+		<icon>package-x-generic</icon>
+		<name>Extract here (unar)</name>
+		<unique-id>ember-unar-extract</unique-id>
+		<command>unar -q -D -o %d %f</command>
+		<description>Extract this archive with unar — handles RAR, StuffIt, ARJ, LZH, CAB</description>
+		<patterns>*.rar;*.RAR;*.7z;*.7Z;*.zip;*.ZIP;*.sit;*.SIT;*.sitx;*.arj;*.ARJ;*.lha;*.LHA;*.lzh;*.LZH;*.cab;*.CAB;*.ace;*.ACE;*.tar.gz;*.tgz;*.tar.bz2;*.tar.xz</patterns>
+		<other-files/>
+	</action>
 </actions>
