@@ -538,6 +538,56 @@ fails against a locale that is present and correct. `LC_COLLATE=C` in that file
 is deliberate and stays; it is a sort order, not a missing locale.
 
 
+## ✅ RESOLVED: Thunar's statusbar timeout outlived its window (2026-09-08)
+
+⛔ **A closed Thunar window keeps working forever.** In a `Thunar --daemon`
+with no windows open at all, stock 4.20.9 logged 3431 lines in 46 minutes,
+**exactly 801 ms apart**, and would have gone on for the life of the process:
+
+    (Thunar:871): exo-CRITICAL **: IA__exo_icon_view_get_selected_items:
+                  assertion 'EXO_IS_ICON_VIEW (icon_view)' failed
+
+⚠ **Upstream knows and has no fix.** The only remedies anyone documents are
+restarting Thunar or rotating the log, so this is ours to patch.
+
+**gdb on the running daemon** — `Thunar-dbg` and `exo-dbg` from Void's debug
+repository — gives the whole mechanism in five frames:
+
+    #1 IA__exo_icon_view_get_selected_items (icon_view=0x0)
+    #2 thunar_abstract_icon_view_get_selected_items    thunar-abstract-icon-view.c:255
+    #3 thunar_standard_view_update_statusbar_text_idle thunar-standard-view.c:2484
+    #4 g_timeout_dispatch
+    #7 g_main_context_iteration
+
+`gtk_widget_destroy()` tears out the `GtkBin`'s child but does **not** finalize
+the view, and every piece of statusbar teardown lived in `finalize`: the
+timeout, the running statusbar job, and the model's signal handlers. Between
+destroy and finalize the child is already NULL while the model is still alive
+and still emitting — `notify::num-files` and `notify::file-size-binary` are
+connected **swapped** to `thunar_standard_view_update_statusbar_text`, which
+re-arms the 50 ms one-shot on every change. Nothing breaks the loop, because
+`finalize` is what would break it and `finalize` is exactly what is not
+happening: the pending statusbar job holds a reference to the view until it
+completes back into it.
+
+⚠ **The log flood is the cheap half.** The same defect leaks one view object per
+window closed, and adds a wakeup every 801 ms to a Pentium 4 — on machines with
+2 GB, in a distribution that had just spent two days on an out-of-memory bug.
+
+`patches/thunar-statusbar-timeout-outlives-view.patch` moves that teardown into
+`dispose`, which already cancels the three drag timers a few lines above.
+`finalize` keeps its copies; they are all guarded on a non-zero id or a non-NULL
+pointer, so they become no-ops.
+
+⛔ **AND IT IS IN THE ROOTFS, NOT THE IMAGE LAYER.** Unlike everything in
+`installer/`, a new Thunar does not reach an image by rebuilding the image. The
+order is `build/mk-thunar.sh`, then `build/mkrootfs.sh`, then
+`build/mkimage.sh`; skip the middle step and the image looks rebuilt and ships
+stock Thunar. `mkrootfs.sh` now names Thunar in the patched-package report for
+that reason — every locally built package belongs on that list, or its absence
+goes back to being silent.
+
+
 ## The Raspberry Pi's display
 
 vc4 KMS works: it binds every component, registers a DRM device, and X runs on

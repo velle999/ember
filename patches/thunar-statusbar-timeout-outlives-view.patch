@@ -1,0 +1,95 @@
+Thunar: stop the statusbar timeout when the view is destroyed, not when it is finalized
+
+Closing a Thunar window leaves its ThunarStandardView running statusbar work
+forever. The daemon then logs, once per iteration, for the life of the process:
+
+    (Thunar:871): exo-CRITICAL **: IA__exo_icon_view_get_selected_items:
+                  assertion 'EXO_IS_ICON_VIEW (icon_view)' failed
+
+Measured on the reference machine 2026-09-08 with Thunar 4.20.9: 3431
+occurrences in 46 minutes, exactly 801 ms apart, in a `Thunar --daemon` with no
+windows open at all. gdb on the running daemon gives the whole mechanism:
+
+    #1 IA__exo_icon_view_get_selected_items (icon_view=0x0)
+    #2 thunar_abstract_icon_view_get_selected_items    thunar-abstract-icon-view.c:255
+    #3 thunar_standard_view_update_statusbar_text_idle thunar-standard-view.c:2484
+    #4 g_timeout_dispatch
+
+gtk_widget_destroy() tears out the GtkBin's child but does not finalize the
+view, and every piece of statusbar teardown lives in finalize:
+
+  - the statusbar timeout is removed there
+  - the running statusbar job is cancelled there
+  - the model's signal handlers are disconnected there
+
+So between destroy and finalize the child is already NULL while the model is
+still alive and still emitting. "notify::num-files" and
+"notify::file-size-binary" are connected swapped to
+thunar_standard_view_update_statusbar_text, which re-arms the 50 ms one-shot on
+every change; the callback asks the class for the selected items; the icon view
+backend hands that NULL child to exo_icon_view_get_selected_items. Nothing ever
+breaks the loop, because finalize is what would break it and finalize is exactly
+what is not happening -- the pending statusbar job holds a reference to the view
+until it completes back into it.
+
+dispose is the right place and already does this for the three drag timers a few
+lines above; the statusbar timeout, the selection-restore timeout, the statusbar
+job and the model handlers were simply left out. finalize keeps its copies: they
+are all guarded on a non-zero id or a non-NULL pointer, so they become no-ops.
+
+Fixes the log flood, the wakeup every 801 ms, and the leak of one view object
+per window closed -- which matters on the 2 GB machines this distribution
+targets.
+
+--- a/thunar/thunar-standard-view.c
++++ b/thunar/thunar-standard-view.c
+@@ -1104,6 +1104,49 @@
+   if (G_UNLIKELY (standard_view->priv->drag_timer_id != 0))
+     g_source_remove (standard_view->priv->drag_timer_id);
+ 
++  /* be sure to cancel any pending statusbar update
++   *
++   * This has to happen here and not in finalize. The view is destroyed with
++   * its window, but it is not finalized until the last reference goes; in
++   * between, gtk_bin_get_child() is already NULL while the statusbar timeout
++   * is still armed. It fires, thunar_standard_view_update_statusbar_text_idle
++   * asks the class for the selected items, and the icon view backend passes
++   * that NULL child straight to exo_icon_view_get_selected_items:
++   *
++   *   exo-CRITICAL: exo_icon_view_get_selected_items: assertion
++   *                 'EXO_IS_ICON_VIEW (icon_view)' failed
++   */
++  if (standard_view->priv->statusbar_text_idle_id != 0)
++    {
++      g_source_remove (standard_view->priv->statusbar_text_idle_id);
++      standard_view->priv->statusbar_text_idle_id = 0;
++    }
++
++  /* and any pending selection restore, for the same reason */
++  if (standard_view->priv->restore_selection_idle_id != 0)
++    {
++      g_source_remove (standard_view->priv->restore_selection_idle_id);
++      standard_view->priv->restore_selection_idle_id = 0;
++    }
++
++  /* cancel a running statusbar job: it completes back into this view, and it
++   * holds a reference to it until it does */
++  if (standard_view->priv->statusbar_job != NULL)
++    {
++      g_signal_handlers_disconnect_by_data (standard_view->priv->statusbar_job, standard_view);
++      exo_job_cancel (EXO_JOB (standard_view->priv->statusbar_job));
++      g_object_unref (standard_view->priv->statusbar_job);
++      standard_view->priv->statusbar_job = NULL;
++    }
++
++  /* stop the model re-arming the timeout we just cancelled: "notify::num-files"
++   * and "notify::file-size-binary" are connected swapped to
++   * thunar_standard_view_update_statusbar_text, so an alive model feeding a
++   * destroyed view schedules it again on every change. Disconnecting only in
++   * finalize is what let that run for the life of the process. */
++  if (standard_view->model != NULL)
++    g_signal_handlers_disconnect_by_data (G_OBJECT (standard_view->model), standard_view);
++
+   /* disconnect from file */
+   if (standard_view->priv->current_directory != NULL)
+     {
