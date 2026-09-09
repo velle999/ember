@@ -70,6 +70,64 @@ the card, and has not rendered a frame. No BTF was generated either (no
 `vmlinux` in the headers tree), so it is not byte-identical to a full dkms
 build.
 
+✅ **GATE 2 — THE X SERVER — ALSO PASSES.** Proven 2026-09-09 on the reference
+machine: xorg-server 1.19.7 built from source on current Void, running NVIDIA
+304.137 on the GeForce 7600 with hardware GL.
+
+```
+X.Org X Server 1.19.7                     built today from 2017 sources, gcc 14.2.1
+(II) NVIDIA GLX Module  304.137
+OpenGL renderer string: GeForce 7600 GS/AGP/SSE2
+OpenGL version string:  2.1.2 NVIDIA 304.137
+direct rendering: Yes     AGP: Enabled, AGPGART, 8x, SBA Enabled
+```
+
+⚠ **Six things beyond the fork's recipe**, every one of them because this tree is
+past the ground that fork tests on (Arch, gcc 12/13, kernel ≤6.15):
+
+1. **gcc 14 rejects what gcc 12 warned about.** `dixfonts.c` fails on
+   `CARD32 (*)(void)` vs `uint32_t (*)(void)`. On i686 both are 32-bit and the
+   mismatch is in name only, so the fix is four `-Wno-error=` flags rather than
+   patching dozens of sites: `incompatible-pointer-types`,
+   `implicit-function-declaration`, `int-conversion`, `implicit-int`.
+2. **`gl >= 9.2.0` can never be satisfied.** Modern Mesa's `gl.pc` reports the
+   OpenGL API version (1.2), not Mesa's. The fork's `libglvnd-glx.patch` rewrites
+   the check — which is why `autoreconf -vfi` is mandatory, it touches configure.ac.
+3. **`libnvidia-tls`: use the `tls/` copy, not the top-level one.** The `.run`
+   ships both and the installer probes to choose. The wrong one segfaults the
+   server instantly at `_nv015tls`.
+4. **NVIDIA's `libglx.so` must replace the server's**, in
+   `lib/xorg/modules/extensions/`. Otherwise the server loads its own 397 KB
+   module and reports `Failed to initialize the GLX module`.
+5. **1.19's bundled `xkbcomp` cannot compile against current XKB data** —
+   `XKB: Couldn't compile keymap`, fatal. Symlink the system one.
+6. **`libunwind` is a runtime dependency** the server links but Void does not
+   install by default.
+
+⛔ **2 of the fork's 100 patches do not apply** to its own branch head:
+`0018_CVE-2021-3472` and `0067_CVE-2025-49177`. Both are security patches. If
+this route is ever taken for real, that is not a detail to skip past.
+
+⚠ **PERFORMANCE IS STILL UNMEASURED, AND THE OBVIOUS NUMBER IS A TRAP.**
+glxgears read 3.5 FPS with the console blanked and 54 FPS awake, and
+`__GL_SYNC_TO_VBLANK=0` did not take, so it was vsync-capped throughout — with
+glxgears at 96% CPU and Xorg at 0.7%, the P4's CPU was the bottleneck, not the
+GPU. Comparing any of that against the nouveau baseline of ~1100 unthrottled FPS
+would be worthless. **The reason to want 304 — reclocking, mature 3D — is still
+an assumption.** Measuring it needs a real install and the same method as the
+baseline, not the hand-rolled prefix used here.
+
+⛔ **AND SHIPPING IT ARMS A KERNEL BUG THIS PROJECT ALREADY FOUND.** `nvidia.ko`
+is an unsigned out-of-tree module, and on this machine that is exactly the
+condition under which reading `/proc/modules` NULL-derefs in `m_show` — see
+[[reference_dracut_oops_on_proc_modules]]. Once the module is loaded, `lsmod`
+kills the box and so does anything invoking `dracut`. It is why `mk-kernel.sh`
+builds the nouveau patches in-tree rather than shipping a loose `.ko`, and it is
+the strongest argument against making 304 anything other than an explicit,
+warned, opt-in.
+
+### The old text, kept because it was wrong in an instructive way
+
 ⛔ **GATE 2 — THE X SERVER — IS NOW THE WHOLE DECISION, AND IT IS UNCHANGED.**
 The fork ships an entire `xorg-server1.19-git-edit` tree because 304.137 needs a
 2017 X server; Ember runs **21.1.24**. Arch's instructions also pin

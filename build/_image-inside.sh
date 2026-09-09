@@ -84,6 +84,25 @@ install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember
 install -Dm755 /installer/ember-zram /mnt/usr/bin/ember-zram
 install -Dm644 /installer/07-ember-zram.sh /mnt/etc/runit/core-services/07-ember-zram.sh
 
+# ── the optional NVIDIA 304 stack ───────────────────────────────────────────
+#
+# ⚠ OPTIONAL, LIKE THE WIFI KEYFILE. Built by build/mk-nvidia304.sh; if the
+# directory is not there the image ships without it and nothing complains,
+# because nouveau is what Ember boots either way.
+#
+# ⛔ IT IS NOT WIRED INTO ANYTHING. No autostart, no modprobe config, no X
+# config — the files sit on disk until somebody runs `ember-gpu nvidia`, which
+# warns first. Loading that unsigned module makes /proc/modules fatal to read
+# on this hardware, so it must never happen by default.
+install -Dm755 /installer/ember-gpu /mnt/usr/bin/ember-gpu
+if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ]; then
+    tar xzf /nvidia304/x11-19.tar.gz -C /mnt
+    install -Dm644 /nvidia304/nvidia.ko /mnt/opt/x11-19/nvidia.ko
+    echo "inside: NVIDIA 304 stack included (opt-in via ember-gpu)"
+else
+    echo "inside: no NVIDIA 304 stack — nouveau only (build/mk-nvidia304.sh builds it)"
+fi
+
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 # ⚠ ONE X CONFIG, LIVE AND INSTALLED. There were briefly two, because the live

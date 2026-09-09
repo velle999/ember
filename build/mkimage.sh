@@ -116,6 +116,7 @@ docker run --rm --privileged \
     -v "$PWD/$INSIDE:/image-inside.sh:ro" \
     -v "$PWD/build/_chroot-setup.sh:/chroot-setup.sh:ro" \
     -v "$PWD/installer:/installer:ro" \
+    $([ -d "out/${EMBER_ID}-nvidia304-$ARCH" ] && echo "-v $PWD/out/${EMBER_ID}-nvidia304-$ARCH:/nvidia304:ro") \
     -v "$EDIDDIR:/edid:ro" \
     -v "$PWD/cores/$ARCH:/cores:ro" \
     -v "$PWD/assets:/ra-assets:ro" \

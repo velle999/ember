@@ -1,0 +1,89 @@
+#!/bin/sh
+#
+# ember-gpu — switch between nouveau (default) and the optional NVIDIA 304 stack.
+#
+# ⛔ nouveau IS WHAT EMBER BOOTS AND THIS CHANGES NOTHING UNTIL IT IS RUN. The
+# 304 stack ships alongside, never in front of it.
+#
+# ⛔ AND SWITCHING TO nvidia ARMS A KERNEL BUG. nvidia.ko is an unsigned
+# out-of-tree module, and on this hardware that is exactly the condition where
+# reading /proc/modules NULL-derefs in m_show. Once it is loaded:
+#
+#     * `lsmod` kills the machine
+#     * anything that invokes dracut kills the machine
+#
+# It is why the nouveau fixes are built into the kernel package rather than
+# shipped as a loose .ko. A reboot clears it — nothing here is persistent.
+#
+# ⚠ AND IT MAY NOT BE FASTER. That is the honest state of it: nouveau cannot
+# reclock this card, so 304 ought to win, but every measurement taken so far was
+# vsync-capped or CPU-bound and none of them proved it. See docs/target-p4.md.
+#
+# Usage:
+#   ember-gpu status
+#   ember-gpu nvidia     # stop the desktop, load 304, start X on vt8
+#   ember-gpu nouveau    # reboot back (the only clean way)
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+P=/opt/x11-19
+KO=$P/nvidia.ko
+
+usage() { sed -n '3,30p' "$0"; exit "${1:-0}"; }
+
+# ⚠ /sys/module, NEVER lsmod. See the header: once nvidia.ko is loaded, reading
+# /proc/modules takes the machine down, and lsmod is exactly that read.
+loaded() { [ -d "/sys/module/$1" ]; }
+
+status() {
+    echo "kernel module:  $(loaded nvidia && echo "nvidia $(cat /sys/module/nvidia/version 2>/dev/null)" || (loaded nouveau && echo nouveau || echo none))"
+    echo "304 stack:      $([ -d $P ] && echo "installed at $P" || echo "not installed")"
+    echo "304 module:     $([ -f $KO ] && echo present || echo missing)"
+    if loaded nvidia; then
+        echo "⛔ /proc/modules is ARMED — do not run lsmod, do not run dracut."
+        echo "   Reboot to clear it."
+    fi
+}
+
+case "${1:-status}" in
+    status) status ;;
+    nouveau)
+        loaded nvidia || { echo "already on nouveau"; exit 0; }
+        echo "The only clean way back is a reboot — the X server, the module and"
+        echo "the console state all have to go together."
+        printf "reboot now? [y/N] "; read -r a
+        case "$a" in y|Y) exec reboot ;; *) echo "nothing done"; exit 0 ;; esac ;;
+    nvidia)
+        [ "$(id -u)" = 0 ] || { echo "ember-gpu: run me as root" >&2; exit 1; }
+        [ -f "$KO" ] || { echo "ember-gpu: $KO is missing — this image was built without the 304 stack" >&2; exit 1; }
+        cat <<'WARN'
+⛔ This loads an unsigned out-of-tree kernel module. On this hardware that makes
+   reading /proc/modules fatal: `lsmod` and anything invoking dracut will take
+   the machine down until you reboot.
+
+   It also stops your desktop. X restarts on vt8 under xorg-server 1.19.
+WARN
+        printf "continue? [y/N] "; read -r a
+        case "$a" in y|Y) : ;; *) echo "nothing done"; exit 0 ;; esac
+
+        echo "stopping the desktop"; sv down lightdm 2>/dev/null || true; sleep 4
+        echo "unloading nouveau";    rmmod nouveau || { echo "could not unload nouveau — is X really stopped?" >&2; exit 1; }
+        echo "loading nvidia";       insmod "$KO"
+        echo "  loaded $(cat /sys/module/nvidia/version 2>/dev/null)"
+        echo "starting X on vt8"
+        env LD_LIBRARY_PATH=$P/lib/nvidia $P/bin/Xorg :2 vt8 \
+            -config $P/etc/xorg.conf -logfile /var/log/Xorg.304.log -noreset &
+        sleep 12
+        # ⚠ The bracket keeps this pattern from matching ember-gpu's own command
+        # line — pkill/pgrep -f will happily match the shell that runs them.
+        if pgrep -f "[x]11-19/bin/Xorg" >/dev/null; then
+            echo "X is running on :2 (vt8). chvt 8 to see it."
+            echo "  DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia glxinfo -B"
+        else
+            echo "X did not start — see /var/log/Xorg.304.log" >&2
+            exit 1
+        fi ;;
+    -h|--help) usage 0 ;;
+    *) usage 2 ;;
+esac
