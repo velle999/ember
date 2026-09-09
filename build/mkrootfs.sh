@@ -279,8 +279,10 @@ while read -r pkg; do
     case "$pkg" in
         linux6.18-*_99)        echo "   $pkg   patched (nouveau fence_sema/accel_move)" ;;
         linux6.18-*)           echo "   $pkg   ⚠ STOCK — no fence_sema=, the nv4x freeze is NOT fixed" ;;
-        mesa-26.1.8_[6-9]*|mesa-dri-26.1.8_[6-9]*|mesa-libgallium-26.1.8_[6-9]*|libgbm-26.1.8_[6-9]*)
-                               echo "   $pkg   patched (nv30 idxbuf relocation)" ;;
+        mesa-26.1.8_[7-9]*|mesa-dri-26.1.8_[7-9]*|mesa-libgallium-26.1.8_[7-9]*|libgbm-26.1.8_[7-9]*)
+                               echo "   $pkg   patched (nv30 idxbuf relocation + surface_del refcount leak)" ;;
+        mesa-26.1.8_6*|mesa-dri-26.1.8_6*|mesa-libgallium-26.1.8_6*|libgbm-26.1.8_6*)
+                               echo "   $pkg   ⚠ idxbuf only — the surface_del leak is NOT fixed, glamor will eat the machine" ;;
         mesa*|libgbm*)         echo "   $pkg   ⚠ STOCK — menu/cursor artefacting on nv30" ;;
         Thunar-*_99)           echo "   $pkg   patched (statusbar timeout freed on destroy)" ;;
         Thunar-*)              echo "   $pkg   ⚠ STOCK — the exo-CRITICAL flood and the per-window view leak are back" ;;

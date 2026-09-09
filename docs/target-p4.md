@@ -84,6 +84,46 @@ carrying its own X server for the i686 tier is a legitimate choice rather than
 an absurd one. It is a project-direction call, and it is the only thing left in
 the way.
 
+### The fallback, if nouveau ever stops being worth it
+
+⚠ **DECIDED 2026-09-09: stay on nouveau + 6.18 for now.** Considerable work is
+already banked there — the nv4x freeze fix, the patched kernel, two Mesa
+patches — and switching would trade a working stack for rebuilding graphics and
+X from the driver up. This section is the escape route, not a plan.
+
+⛔ **AND IF IT IS EVER TAKEN, DROP THE KERNEL IN THE SAME MOVE.** The two
+choices are coupled and the current pairing is the awkward one:
+
+- 6.18 was never chosen for the GPU. `KERNEL_I686` is pinned **by name** to
+  dodge `linux-base`'s 668 MB of firmware, and **by version** only so the
+  rebuilt nouveau matches vermagic. The series itself is just "what Void ships".
+- *"Rolling, so the kernel is new enough for modern hardware quirks"* is an
+  argument that serves **modern** hardware. This target is a fixed 2006
+  machine, and every nouveau patch here exists because a 2025 kernel's nouveau
+  is fighting a GeForce 7600. Staying current means re-verifying that patch set
+  on every series bump.
+- The fork targets **6.12-LTS** natively; Void packages `linux6.12` (6.12.108)
+  and `linux6.6`. Reaching 6.18 needed a hand-ported makefile hunk. Going back
+  deletes that work instead of adding to it.
+
+So the coherent fallback is a **period-matched stack**: 304.137 + `linux6.12`
+LTS + xorg-server 1.19, all three of which the fork already tests together.
+
+⚠ **The counterweights, which are real.** Newer kernels still help the
+*non-GPU* modern parts — USB, SATA, the storage that is actually booted from —
+and the **Pi 4/5 tier genuinely wants a current kernel**, so this means
+different kernel policy per architecture. `config.sh` is already arch-split for
+the Pi packages, so it is not new machinery, but it is new complexity.
+
+**Order of work, if it is taken:**
+
+1. `linux6.12` for i686, Pi stays current. Re-check `validate-profiles.sh`.
+2. 304.137 module — 29 patches apply, the 2 makefile hunks are ported above,
+   and against 6.12 they should not need porting at all.
+3. `xorg-server` 1.19 and `xf86-input-libinput` 1.1.0 for i686, from the fork's
+   PKGBUILDs into xbps-src. **This is the actual cost.**
+4. Delete the nouveau patch set and both Mesa patches for the i686 tier.
+
 ⚠ **Why it is worth answering.** On this card the proprietary driver very
 likely wins, and not marginally: nouveau has no working reclocking for nv4x, so
 the GPU sits at boot clocks, while 304 clocks it properly. And nv30 in Mesa is

@@ -86,19 +86,11 @@ install -Dm644 /installer/07-ember-zram.sh /mnt/etc/runit/core-services/07-ember
 
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
-# ⛔ TWO X CONFIGS, AND THE DIFFERENCE IS DELIBERATE. The live medium runs with
-# acceleration OFF because glamor on nv30 leaks pixmaps until the machine is out
-# of memory, and the installer's own 5.2 GB copy triggers it every time — four
-# measured runs in installer/20-modesetting.conf. An installed desktop wants
-# glamor and does not hit the bug in ordinary use.
-#
-# ⚠ The second file is NOT active where it lands. It sits in /usr/share/ember/
-# and ember-install copies it over the target's copy after the rsync, because
-# the rsync would otherwise carry the live medium's software-rendering config
-# onto every installed machine.
+# ⚠ ONE X CONFIG, LIVE AND INSTALLED. There were briefly two, because the live
+# medium ran AccelMethod "none" while the nv30 pixmap leak was open; that is
+# fixed in Mesa now (patches/mesa-nv30-surface-del-leaks-resource-ref.patch) and
+# the split is gone with it. See installer/20-modesetting.conf.
 install -Dm644 /installer/20-modesetting.conf /mnt/etc/X11/xorg.conf.d/20-modesetting.conf
-install -Dm644 /installer/20-modesetting-installed.conf \
-        /mnt/usr/share/ember/20-modesetting-installed.conf
 
 # ── libretro cores ──────────────────────────────────────────────────────────
 # ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the
