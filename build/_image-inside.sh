@@ -113,6 +113,10 @@ install -Dm644 /installer/08-ember-gpu.sh  /mnt/etc/runit/core-services/08-ember
 install -Dm644 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
 install -Dm644 /installer/nvidia304-supported.ids \
                /mnt/usr/share/ember/nvidia304-supported.ids
+# ⛔ Without this rule the 304 desktop never starts: no DRM device means seat0
+# is not graphical and lightdm waits for ever. See the rule for the full story.
+install -Dm644 /installer/71-ember-nvidia-seat.rules \
+               /mnt/etc/udev/rules.d/71-ember-nvidia-seat.rules
 if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ]; then
     tar xzf /nvidia304/x11-19.tar.gz -C /mnt
     install -Dm644 /nvidia304/nvidia.ko /mnt/opt/x11-19/nvidia.ko
@@ -201,6 +205,24 @@ install -Dm755 /chroot-setup.sh /mnt/tmp/setup.sh
 chroot /mnt env USERNAME="$USERNAME" PASSWORD="$PASSWORD" \
                 TIER="$TIER" LOOP="$LOOP" BOOTLOADER=grub /tmp/setup.sh
 rm -f /mnt/tmp/setup.sh
+
+# ── optional developer ssh key ──────────────────────────────────────────────
+#
+# ⛔ OFF UNLESS ASKED FOR, AND IT MUST NEVER BE ON FOR A RELEASE. An image with
+# somebody's key baked in lets that person into every machine installed from it.
+# So this needs BOTH a key file AND EMBER_DEV_SSH_KEY=1 on the command line;
+# either alone does nothing. installer/authorized_keys is gitignored.
+#
+# ⚠ It exists because sshd IS enabled by default (see _chroot-setup.sh) but no
+# key is, so a freshly installed machine can only be reached by typing the
+# password at its own keyboard — which is the one thing you cannot do when the
+# thing you are debugging is the display.
+if [ "${DEV_SSH_KEY:-0}" = 1 ] && [ -f /installer/authorized_keys ]; then
+    install -d -m 700 -o 1000 -g 1000 /mnt/home/"$USERNAME"/.ssh
+    install -Dm600 -o 1000 -g 1000 /installer/authorized_keys \
+        /mnt/home/"$USERNAME"/.ssh/authorized_keys
+    echo "inside: ⚠ DEVELOPER SSH KEY BAKED IN — do not release this image"
+fi
 
 # ── verify by content, not by exit status ───────────────────────────────────
 #

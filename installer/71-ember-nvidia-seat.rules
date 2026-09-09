@@ -1,0 +1,25 @@
+# Ember: make seat0 graphical when the proprietary NVIDIA driver is in use.
+#
+# ⛔ WITHOUT THIS, lightdm NEVER STARTS X AND SAYS NOTHING USEFUL. The 304
+# driver is not a KMS driver: it creates no /dev/dri/card0 and no framebuffer.
+# udev's stock rules only tag DRM and graphics devices as "master-of-seat", so
+# with nouveau gone seat0 has no master device, elogind reports
+# CanGraphical=no, and lightdm sits at
+#
+#     DEBUG: Monitoring logind for seats
+#
+# for ever. No X process, no Xorg log, no error anywhere -- the monitor simply
+# receives no signal and goes into standby.
+#
+# ⚠ THIS PROJECT HAS NOW HIT THAT SIGNATURE THREE TIMES from three different
+# causes: the Pi's vc4 bind never completing (_image-inside-pi.sh), base-minimal
+# shipping eudev-libudev without the daemon (profiles/base.pkgs), and this. If
+# lightdm is idle at "Monitoring logind for seats", the question is always "what
+# does seat0 think it has", and `loginctl seat-status seat0` is the answer.
+#
+# ⚠ DRIVER=="nvidia" SCOPES IT DELIBERATELY. Tagging the VGA device
+# unconditionally would give seat0 a second master on machines that also have a
+# real DRM device, and could mark the seat graphical before that device is
+# ready. This fires only once nvidia.ko is actually bound to the card, so
+# nouveau, radeon and i915 systems are untouched.
+SUBSYSTEM=="pci", ATTR{class}=="0x030000", DRIVER=="nvidia", TAG+="seat", TAG+="master-of-seat"

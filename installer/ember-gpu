@@ -71,11 +71,50 @@ status() {
     fi
 }
 
+# ⛔ THE DRIVER CHOICE LIVES ON THE KERNEL COMMAND LINE, NOT IN A BOOT SCRIPT.
+# 304 cannot initialise a card nouveau has already programmed -- it fails with
+# RmInitAdapter and /dev/nvidia0 returns EIO -- and by the time any script in
+# runit stage 1 runs, nouveau is already up from the initramfs. So selecting the
+# proprietary driver means editing GRUB and rebooting; there is no runtime path
+# that works, and the previous version's `rmmod nouveau; insmod nvidia` left the
+# machine with no display at all.
+BLACKLIST="rd.driver.blacklist=nouveau modprobe.blacklist=nouveau"
+
+grub_set() {   # $1 = want blacklist? yes|no
+    [ -f /etc/default/grub ] || { echo "  (no /etc/default/grub -- live medium? use the boot menu)"; return 0; }
+    command -v grub-mkconfig >/dev/null || { echo "  (grub-mkconfig missing, not updating the bootloader)"; return 0; }
+    # strip any existing copy, then re-add if wanted, so this is idempotent
+    sed -i "s/ *rd\.driver\.blacklist=nouveau//g; s/ *modprobe\.blacklist=nouveau//g" /etc/default/grub
+    if [ "$1" = yes ]; then
+        if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
+            sed -i "s|^GRUB_CMDLINE_LINUX=\"|&$BLACKLIST |" /etc/default/grub
+        else
+            echo "GRUB_CMDLINE_LINUX=\"$BLACKLIST\"" >> /etc/default/grub
+        fi
+    fi
+    echo "  updating the bootloader..."
+    # ⚠ grub-mkconfig does NOT invoke dracut, so it is safe to run with nvidia.ko
+    # loaded. Anything that DOES run dracut is not.
+    grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 \
+        || { echo "  ⚠ grub-mkconfig failed; the boot line was NOT updated" >&2; return 1; }
+    if [ "$1" = yes ]; then
+        grep -q "rd.driver.blacklist=nouveau" /boot/grub/grub.cfg \
+            || { echo "  ⚠ the blacklist did not reach grub.cfg" >&2; return 1; }
+        echo "  nouveau is blacklisted from the next boot"
+    else
+        echo "  nouveau will load normally from the next boot"
+    fi
+}
+
 set_mode() {
     [ "$(id -u)" = 0 ] || { echo "ember-gpu: run me as root" >&2; exit 1; }
     mkdir -p "$(dirname "$CONF")"
     printf '%s\n' "$1" > "$CONF"
     echo "configured: $1"
+    case "$1" in
+        nvidia|nvidia304) grub_set yes ;;
+        *)                grub_set no  ;;
+    esac
     now=$(/usr/bin/ember-gpu-detect 2>/dev/null || echo '?')
     echo "next boot will use: $now"
     if [ "$now" != "$(cat "$STATE" 2>/dev/null || echo)" ]; then
