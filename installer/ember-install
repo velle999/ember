@@ -352,6 +352,41 @@ for d in dev proc sys; do mount --bind "/$d" "$MNT/$d"; done
 sed -i '/^GRUB_DISABLE_OS_PROBER=/d' "$MNT/etc/default/grub"
 echo 'GRUB_DISABLE_OS_PROBER=false' >> "$MNT/etc/default/grub"
 
+# ── carry the graphics choice onto the disk ─────────────────────────────────
+#
+# ⛔ THE DRIVER CHOICE IS A BOOT-LINE SETTING AND THE INSTALLER HAS TO WRITE IT.
+# It used to exist only as a live boot-menu entry, so a machine installed from
+# the proprietary entry still came up on nouveau: the installed grub.cfg is
+# generated from the target's own /etc/default/grub, and nothing put the
+# blacklist there. The symptom is a machine that detects nvidia304, refuses the
+# handover and falls back -- correct, but not what was asked for.
+#
+# ⚠ The machine running the installer IS the target, so detecting here is valid.
+#
+# ⛔ nouveau MUST be blacklisted before the initramfs. 304 cannot initialise a
+# card nouveau has already programmed (RmInitAdapter fails, /dev/nvidia0 gives
+# EIO), so unloading it later cannot work -- see installer/ember-gpu-apply.
+if [ -x /usr/bin/ember-gpu-detect ] && [ "$(/usr/bin/ember-gpu-detect 2>/dev/null)" = nvidia304 ]; then
+    printf 'nvidia\n' > "$MNT/etc/ember/gpu" 2>/dev/null || {
+        mkdir -p "$MNT/etc/ember" && printf 'nvidia\n' > "$MNT/etc/ember/gpu"; }
+    sed -i "s/ *rd\.driver\.blacklist=nouveau//g; s/ *modprobe\.blacklist=nouveau//g" \
+        "$MNT/etc/default/grub"
+    if grep -q '^GRUB_CMDLINE_LINUX=' "$MNT/etc/default/grub"; then
+        sed -i 's|^GRUB_CMDLINE_LINUX="|&rd.driver.blacklist=nouveau modprobe.blacklist=nouveau |' \
+            "$MNT/etc/default/grub"
+    else
+        echo 'GRUB_CMDLINE_LINUX="rd.driver.blacklist=nouveau modprobe.blacklist=nouveau"' \
+            >> "$MNT/etc/default/grub"
+    fi
+    echo "  graphics: NVIDIA proprietary 304 (nouveau blacklisted on the boot line)"
+    echo "            ⚠ once loaded, lsmod and anything running dracut will crash"
+    echo "              this machine. Run 'ember-gpu nouveau' before a kernel upgrade."
+    echo "            If it does not come up, pick 'e' at the GRUB menu and remove"
+    echo "            the blacklist, or the machine falls back to nouveau by itself."
+else
+    echo "  graphics: open driver (nouveau/radeon/i915 as the card requires)"
+fi
+
 chroot "$MNT" /bin/bash -euc "
     dracut --force --no-hostonly
     grub-install --target=i386-pc --boot-directory=/boot --recheck '$DISK'

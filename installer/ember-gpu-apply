@@ -35,7 +35,16 @@ fi
 # ── the proprietary path ────────────────────────────────────────────────────
 fallback() {
     log "ember-gpu-apply: FALLING BACK to nouveau -- $1"
-    loaded nouveau || modprobe nouveau 2>/dev/null || true
+    # ⛔ A PLAIN modprobe CAN BE REFUSED ON THE PATH THAT NEEDS THIS MOST. The
+    # proprietary boot carries modprobe.blacklist=nouveau, so if the fallback
+    # fires there, modprobe may be blocked -- leaving no driver at all, which is
+    # the dead screen this exists to prevent. insmod by path bypasses it.
+    if ! loaded nouveau; then
+        modprobe nouveau 2>>"$LOG" \
+            || { NKO=$(modinfo -n nouveau 2>/dev/null); \
+                 [ -n "$NKO" ] && insmod "$NKO" 2>>"$LOG"; } \
+            || log "ember-gpu-apply: could not load nouveau either -- no driver"
+    fi
     # ⚠ Rebind the framebuffer console. Unloading nouveau may have unbound it,
     # and a fallback that leaves a blank console is only half a recovery.
     for v in /sys/class/vtconsole/vtcon*; do
@@ -87,6 +96,16 @@ if loaded nouveau; then
     fallback "nouveau was not blacklisted on the kernel command line"
 fi
 
+# ⚠ CHECK VERMAGIC FIRST so a kernel upgrade explains itself. nvidia.ko is built
+# against one specific kernel; after an upgrade insmod fails with nothing but
+# "Invalid module format", and the machine quietly comes up on nouveau with no
+# hint as to why. This is not fatal -- the fallback handles it -- but the log
+# should say what happened.
+KO_VM=$(modinfo -F vermagic "$KO" 2>/dev/null | awk '{print $1}')
+if [ -n "$KO_VM" ] && [ "$KO_VM" != "$(uname -r)" ]; then
+    log "ember-gpu-apply: nvidia.ko was built for $KO_VM, running $(uname -r)"
+    fallback "the 304 module does not match this kernel (rebuild with build/mk-nvidia304.sh)"
+fi
 insmod "$KO" 2>>"$LOG" || fallback "insmod $KO failed"
 loaded nvidia || fallback "nvidia.ko loaded but /sys/module/nvidia is absent"
 
@@ -104,33 +123,33 @@ loaded nvidia || fallback "nvidia.ko loaded but /sys/module/nvidia is absent"
 udevadm control --reload-rules 2>>"$LOG" || true
 udevadm trigger --subsystem-match=pci --action=change 2>>"$LOG" || true
 udevadm settle --timeout=10 2>>"$LOG" || true
-log "ember-gpu-apply: seat0 CanGraphical=$(loginctl show-seat seat0 -p CanGraphical 2>/dev/null | cut -d= -f2)"
+# ⚠ Not asking loginctl here: elogind is not running yet in stage 1, so the
+# answer is always empty and the log line reads like a fault.
+log "ember-gpu-apply: udev re-triggered for the nvidia seat tag"
 
-# ⛔ PROVE THE X SERVER CAN START BEFORE HANDING THE MACHINE TO lightdm.
-# Removing nouveau takes the framebuffer console with it, so if 304 then fails
-# there is no console AND no X: the monitor gets no signal at all and drops into
-# standby, which is what the first 304 boot did. There is nothing to read a log
-# from and nothing to type into. A probe here costs a couple of seconds and
-# turns that into a machine that comes up on nouveau.
+# ⛔ CHECK THE DEVICE OPENS, DO NOT TRY TO "PROBE" THE X SERVER. This used to
+# run `Xorg -probeonly`, and that option does not exist in xorg-server 1.19 --
+# it is an XFree86 relic. The server exited with "Unrecognized option:
+# -probeonly", the guard read that as the card failing, and a perfectly working
+# GPU was thrown back to nouveau on every single boot. A guard that fails closed
+# on its own bug is worse than no guard.
 #
-# ⚠ -probeonly initialises the driver and exits; it catches "the driver will not
-# start on this card", which is the case that leaves a dead screen. It cannot
-# catch a server that starts and then sets a mode the monitor will not sync to.
-PLOG=/var/log/Xorg.304-probe.log
-if [ -x "$P/bin/Xorg" ]; then
-    if ! env LD_LIBRARY_PATH="$P/lib/nvidia" timeout 30 \
-            "$P/bin/Xorg" :9 -probeonly -config "$P/etc/xorg.conf" \
-            -logfile "$PLOG" >>"$LOG" 2>&1; then
-        # ⚠ KEEP THE LOG SOMEWHERE THAT SURVIVES THE FALLBACK. On a live medium
-        # it is RAM only and the reason for the failure is otherwise gone.
-        cp "$PLOG" /run/ember-gpu-304-failed.log 2>/dev/null || true
-        log "ember-gpu-apply: 304 X probe FAILED, see /run/ember-gpu-304-failed.log"
-        grep -E "\(EE\)" "$PLOG" 2>/dev/null | tail -5 >> "$LOG" || true
-        rmmod nvidia 2>>"$LOG" || true
-        fallback "the 304 X server could not start on this card"
-    fi
-    log "ember-gpu-apply: 304 X probe passed"
+# ⚠ Test the thing that actually broke: when the GPU has not initialised, NVRM
+# logs RmInitAdapter failed and opening /dev/nvidia0 returns EIO -- which is
+# exactly what the X server hits and reports as "no screens found".
+#
+# ⚠ AND THE STAKES ARE LOWER NOW. This was written when the proprietary path
+# unloaded nouveau and took the framebuffer console with it, so a failure meant
+# no console and no X. With nouveau blacklisted from the kernel command line the
+# console is plain VGA text and survives, so the fallback is a convenience
+# rather than the only way back in.
+if ! (exec 3< /dev/nvidia0) 2>>"$LOG"; then
+    log "ember-gpu-apply: /dev/nvidia0 will not open -- the GPU did not initialise"
+    dmesg 2>/dev/null | grep -iE "NVRM|RmInit" | tail -5 >> "$LOG" 2>/dev/null || true
+    rmmod nvidia 2>>"$LOG" || true
+    fallback "the NVIDIA GPU did not initialise (see NVRM messages above)"
 fi
+log "ember-gpu-apply: /dev/nvidia0 opens, GPU initialised"
 
 echo nvidia304 > "$STATE"
 log "ember-gpu-apply: nvidia $(cat /sys/module/nvidia/version 2>/dev/null || echo '?') loaded"
