@@ -3,7 +3,7 @@
 # ⚠ WINE IS NOT THE ANSWER TO EVERYTHING, and reaching for it first is the usual
 # mistake. Three different problems get three different tools:
 #
-#   · DOS games          → dosbox-staging. Wine cannot run a DOS binary at all;
+#   · DOS games          → dosbox-x. Wine cannot run a DOS binary at all;
 #                          it is a Windows compatibility layer, not a PC one.
 #   · LucasArts / Sierra → scummvm, which reads the original data files and
 #     point-and-click        needs neither Wine nor DOS.
@@ -13,7 +13,26 @@
 # drivers, and no compatibility layer emulates a Windows ring-0 driver. A disc
 # with either needs a patched executable or a GOG re-release; this is a wall,
 # not a configuration problem.
-dosbox-staging
+# ⛔ dosbox-x, AND NOT dosbox-staging, AND THAT IS NOT A PREFERENCE.
+# dosbox-staging CANNOT EXECUTE ON THIS HARDWARE. Void's 0.82.2 binary contains
+# 19 `pshufb` instructions — SSSE3, introduced with Core 2, with no legacy
+# encoding to fall back to. The reference Pentium 4 reports
+#     flags: mmx sse sse2 pni        (pni is SSE3, and that is the ceiling)
+# so it takes SIGILL inside GFX_Events on every launch. Void sets no arch flags;
+# the baseline is upstream's own. It fails identically under nouveau, llvmpipe
+# and NVIDIA 304, with a pristine config, so it is not a driver or a setting.
+#
+# ⚠ IF SOMEONE PUTS dosbox-staging BACK, DOS GAMES STOP WORKING ENTIRELY on the
+# hardware this distribution exists for, and the failure looks like a graphics
+# bug rather than a CPU one.
+#
+# ⚠ Void's plain `dosbox` (0.74pl3) is also clean on this CPU and is the
+# fallback. It does NOT conflict with dosbox-x — they own different binaries,
+# /usr/bin/dosbox and /usr/bin/dosbox-x, and install side by side. dosbox-staging
+# is the one that conflicts, because it also claims /usr/bin/dosbox.
+#
+# dosbox-x is built by build/mk-dosbox-x.sh — Void does not package it.
+dosbox-x
 scummvm
 winetricks
 # ⚠ retroarch is 16 MB and ships with NOTHING TO RUN. Void's entire libretro
