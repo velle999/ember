@@ -77,7 +77,8 @@ grub)
     # inside a container against the CONTAINER's hardware; a hostonly image made
     # there carries that machine's storage drivers and not the target's, and the
     # failure is a kernel panic on a box with no serial console.
-    # ⚠ nouveau accel_move=1 fence_sema=0 — SET ONLY IF THE MODULE HAS THEM.
+    # ⚠ nouveau accel_move=1 fence_sema=0 — ON THE KERNEL CMDLINE, and only if
+    # the module actually has them.
     #
     # fence_sema=0 is LOAD-BEARING, not an optimisation. Measured on the
     # reference machine, same kernel and Mesa and vram_pushbuf=0 either way:
@@ -86,30 +87,65 @@ grub)
     #     fence_sema=1   two channels dead 16 SECONDS into round 1, Xorg's
     #                    among them
     #
+    # ⛔ THE CMDLINE IS THE OWNER, NOT /etc/modprobe.d, AND THAT IS THE FIX.
+    # These used to be written to /etc/modprobe.d/nouveau-fix.conf, under a
+    # comment claiming dracut freezes a copy of /etc/modprobe.d into the
+    # initramfs. IT DOES NOT. Void's dracut 80base/module-setup.sh:
+    #
+    #     [[ -d /usr/lib/modprobe.d ]] && inst_multiple -o "/usr/lib/modprobe.d/*.conf"
+    #     [[ $hostonly ]] && inst_multiple -H -o /etc/modprobe.d/*.conf
+    #
+    # — /etc/modprobe.d is copied ONLY under --hostonly, and this build is
+    # deliberately --no-hostonly (see above). Verified against the 2026-09-08
+    # image: its initramfs carried nouveau.ko and dracut's drm module but not one
+    # etc/modprobe.d entry, so nouveau came up IN THE INITRAMFS at fence_sema=1 —
+    # the 16-second case above — and both params are perm 0400, so nothing on the
+    # booted system could correct it afterwards. The cmdline reaches the module
+    # wherever it loads: libkmod parses /proc/cmdline for `module.param=`, inside
+    # the initramfs too, which is exactly why vram_pushbuf=0 was working.
+    #
+    # ⛔ ONE OWNER. Do not ALSO write these to /etc/modprobe.d or
+    # /usr/lib/modprobe.d. All four graphics parameters live on the cmdline in
+    # /etc/default/grub, which the installer copies to the target and re-runs
+    # grub-mkconfig against; a second copy is the one that goes stale.
+    #
     # ⛔ These parameters exist ONLY on the patched module, and modprobe REFUSES
-    # a module given an unknown parameter — writing them unconditionally into an
+    # a module given an unknown parameter — putting them on the cmdline of an
     # image built without the patched kernel leaves the machine with NO graphics
-    # driver at all. So ask the module rather than assuming either way.
-    #
-    # ⚠ THIS MUST RUN BEFORE dracut BELOW. The initramfs carries its own copy of
-    # /etc/modprobe.d, frozen at the moment dracut runs, and nouveau loads FROM
-    # the initramfs — so a file written after dracut has no effect on the next
-    # boot, and editing it on the installed system later has none either.
-    #
-    # ⛔ THIS BLOCK USED TO SKIP THEM UNCONDITIONALLY, with a comment saying the
-    # patched module "does not ship in the image yet". That was true when it was
-    # written and false three hours later, and the result was an image that
-    # booted the patched kernel with fence_sema at its default of 1 — which
-    # crashed the installer's own UI. A condition that reads the module cannot
-    # go stale the way a comment about the future can.
+    # driver at all. So ask the module rather than assuming either way; a
+    # condition that reads the module cannot go stale the way a comment about the
+    # future can.
+    rm -f /etc/modprobe.d/nouveau-fix.conf /etc/modprobe.d/ttm-lowmem.conf
+
+    NOUVEAU_ARGS=
     KMOD=$(find /usr/lib/modules /lib/modules -name 'nouveau.ko*' 2>/dev/null | head -1)
     if [ -n "$KMOD" ] && modinfo -p "$KMOD" 2>/dev/null | grep -q '^fence_sema'; then
-        printf 'options nouveau accel_move=1 fence_sema=0\n' > /etc/modprobe.d/nouveau-fix.conf
-        echo "chroot: patched nouveau detected - accel_move=1 fence_sema=0 set"
-        grep -q 'fence_sema=0' /etc/modprobe.d/nouveau-fix.conf || {
-            echo "chroot: nouveau-fix.conf did not take" >&2; exit 1; }
+        NOUVEAU_ARGS="nouveau.accel_move=1 nouveau.fence_sema=0"
+        echo "chroot: patched nouveau detected - accel_move=1 fence_sema=0 on the cmdline"
     else
         echo "chroot: stock nouveau - accel_move/fence_sema NOT set (they would refuse to load)"
+    fi
+
+    # ⚠ ttm.dma32_pages_limit — the low-memory brake that never engages.
+    # TTM allocates GFP_DMA32; a 32-bit kernel has no ZONE_DMA32, so those pages
+    # come only from the ~838 MB low zone, and the default limit is roughly that
+    # whole zone — so the brake exists but can never apply. TTM allocates until
+    # the kernel starts killing processes, and on the reference machine it took
+    # Xorg and the whole desktop session with it:
+    #
+    #     Xorg invoked oom-killer: gfp_mask=GFP_USER|GFP_DMA32
+    #       __ttm_pool_alloc -> nouveau_ttm_tt_populate -> ttm_bo_evict
+    #
+    # 65536 pages caps it at 256 MB. Applies to ANY 32-bit host running TTM, not
+    # just this card. ⚠ ttm is a MODULE here and nouveau pulls it in from the
+    # initramfs, so this had the same /etc/modprobe.d problem as the two above and
+    # moves to the cmdline with them — asked of the module for the same reason.
+    TTM_ARGS=
+    TMOD=$(find /usr/lib/modules /lib/modules -name 'ttm.ko*' 2>/dev/null | head -1)
+    if [ -n "$TMOD" ] && modinfo -p "$TMOD" 2>/dev/null | grep -q '^dma32_pages_limit'; then
+        TTM_ARGS="ttm.dma32_pages_limit=65536"
+    else
+        echo "chroot: ttm has no dma32_pages_limit - not set"
     fi
 
     dracut --force --no-hostonly
@@ -144,36 +180,56 @@ grub)
     # and repeated ISO mounts — the workload that used to kill it.
     #
     # ⚠ It is the COMBINATION that is stable: this plus fence_sema=0 and
-    # accel_move=1 in /etc/modprobe.d. An earlier test of vram_pushbuf=0 alone,
+    # accel_move=1, appended just below. An earlier test of vram_pushbuf=0 alone,
     # without those, wedged — do not read that as a verdict on this setting.
     # ⚠ Still NOT a substitute for the AGP backends above: without via-agp the
     # GART is 128 MiB and the shortfall lands in system RAM until the OOM killer
     # takes Xorg.
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200 nouveau.vram_pushbuf=0"/' /etc/default/grub
+    # ⛔ THE GRAPHICS PARAMS GO IN GRUB_CMDLINE_LINUX, NOT ..._DEFAULT. grub-mkconfig
+    # omits _DEFAULT from the recovery ("single") entry by design — so with them in
+    # _DEFAULT, the one entry you boot BECAUSE the machine is misbehaving is the one
+    # entry that comes up at fence_sema=1. _DEFAULT keeps the console settings, which
+    # recovery overrides on purpose anyway.
+    CMDLINE_DEFAULT="loglevel=4 console=tty0 console=ttyS0,115200"
+    CMDLINE_GFX="nouveau.vram_pushbuf=0${NOUVEAU_ARGS:+ $NOUVEAU_ARGS}${TTM_ARGS:+ $TTM_ARGS}"
+    sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$CMDLINE_DEFAULT\"|" /etc/default/grub
+    sed -i "/^GRUB_CMDLINE_LINUX=/d" /etc/default/grub
+    echo "GRUB_CMDLINE_LINUX=\"$CMDLINE_GFX\"" >> /etc/default/grub
     grep -q '^GRUB_TERMINAL' /etc/default/grub || echo 'GRUB_TERMINAL_OUTPUT="console serial"' >> /etc/default/grub
     echo 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0"' >> /etc/default/grub
 
-    grep -q "nouveau.vram_pushbuf=0" /etc/default/grub || {
-        echo "chroot: vram_pushbuf missing from the kernel cmdline" >&2; exit 1; }
-
-    # ⚠ ttm.dma32_pages_limit — the low-memory brake that never engages.
-    # TTM allocates GFP_DMA32; a 32-bit kernel has no ZONE_DMA32, so those pages
-    # come only from the ~838 MB low zone, and the default limit is roughly that
-    # whole zone — so the brake exists but can never apply. TTM allocates until
-    # the kernel starts killing processes, and on the reference machine it took
-    # Xorg and the whole desktop session with it:
-    #
-    #     Xorg invoked oom-killer: gfp_mask=GFP_USER|GFP_DMA32
-    #       __ttm_pool_alloc -> nouveau_ttm_tt_populate -> ttm_bo_evict
-    #
-    # 65536 pages caps it at 256 MB. Applies to ANY 32-bit host running TTM,
-    # not just this card.
-    printf 'options ttm dma32_pages_limit=65536\n' > /etc/modprobe.d/ttm-lowmem.conf
-
-
+    for arg in $CMDLINE_DEFAULT $CMDLINE_GFX; do
+        grep -qF -- "$arg" /etc/default/grub || {
+            echo "chroot: $arg missing from /etc/default/grub" >&2; exit 1; }
+    done
 
     grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
     grub-mkconfig -o /boot/grub/grub.cfg
+
+    # ⛔ CHECK THE FILE THAT BOOTS, NOT THE FILE THAT CONFIGURES IT.
+    # /etc/default/grub is the input; grub-mkconfig is what turns it into the line
+    # the kernel is actually handed, and only that line is evidence. The whole
+    # class of bug being fixed here is a setting that was written, verified where
+    # it was written, and never reached the module.
+    for arg in $CMDLINE_DEFAULT; do
+        grep -qF -- "$arg" /boot/grub/grub.cfg || {
+            echo "chroot: $arg did not reach /boot/grub/grub.cfg" >&2; exit 1; }
+    done
+
+    # ⚠ EVERY menu entry, not just the first one — that is the whole reason these
+    # moved to GRUB_CMDLINE_LINUX, so a check that only greps the file would pass
+    # on exactly the arrangement being fixed.
+    grep -E '^[[:space:]]+linux[[:space:]]' /boot/grub/grub.cfg > /tmp/grub-linux-lines
+    [ -s /tmp/grub-linux-lines ] || {
+        echo "chroot: no kernel lines found in grub.cfg" >&2; exit 1; }
+    for arg in $CMDLINE_GFX; do
+        n_total=$(wc -l < /tmp/grub-linux-lines)
+        n_have=$(grep -cF -- "$arg" /tmp/grub-linux-lines || true)
+        [ "$n_have" = "$n_total" ] || {
+            echo "chroot: $arg is on only $n_have of $n_total grub.cfg kernel lines" >&2
+            exit 1; }
+    done
+    rm -f /tmp/grub-linux-lines
     ;;
 none)
     # ⚠ THE PI HAS NO BOOTLOADER TO INSTALL. Its firmware reads the FAT
@@ -275,6 +331,24 @@ if [ "$TIER" = desktop ]; then
     fi
     grep -q "sv check elogind" /etc/sv/lightdm/run || {
         echo "chroot: lightdm run script does not wait for elogind" >&2; exit 1; }
+
+    # ⛔ AND XORG MUST NOT BE OOM-PROTECTED ON THIS HARDWARE. X sets its own
+    # oom_score_adj to ~-900, which on the reference machine turned a GPU memory
+    # storm into a massacre of everything else: the killer is forbidden the one
+    # process consuming the memory, so it took 23 others — dbus, elogind, udevd,
+    # NetworkManager, lightdm and every agetty, leaving no console login. The
+    # underlying nv30 render-target bug is still open; this bounds its blast
+    # radius to one session, which runit then respawns.
+    if [ -x /usr/libexec/ember-xorg-oom-reset ]; then
+        grep -q '^display-setup-script=' /etc/lightdm/lightdm.conf \
+            || sed -i 's|^\[Seat:\*\]|&\ndisplay-setup-script=/usr/libexec/ember-xorg-oom-reset|' \
+                   /etc/lightdm/lightdm.conf
+        grep -q '^display-setup-script=/usr/libexec/ember-xorg-oom-reset' /etc/lightdm/lightdm.conf || {
+            echo "chroot: lightdm display-setup-script not set" >&2; exit 1; }
+    else
+        echo "chroot: ember-xorg-oom-reset missing - Xorg stays OOM-protected" >&2
+        exit 1
+    fi
 
     # ── audio ───────────────────────────────────────────────────────────────
     # ⛔ INSTALLING pipewire WIRES UP NOTHING ON VOID. The package ships the

@@ -1,0 +1,23 @@
+#!/bin/sh
+# ember-xorg-oom-reset — put Xorg back on equal footing with the OOM killer.
+#
+# Run by lightdm as display-setup-script, i.e. as root, once X is up.
+#
+# ⛔ WHY: the X server sets its OWN oom_score_adj to about -900 at startup, so
+# the kernel spares it. On this hardware that inverts the outcome of a GPU
+# memory storm. Measured on the reference machine 2026-09-07: nv30 rejects a
+# render target, Xorg retries in a loop asking for GFP_DMA32 each time, and the
+# OOM killer — forbidden from touching the one process consuming the memory —
+# took 23 OTHERS instead: dbus, elogind, udevd, NetworkManager, lightdm and
+# EVERY agetty, so there was not even a console login left.
+#
+# At 0 the killer takes Xorg, lightdm respawns it, and the cost is one session
+# instead of the whole machine. This does not fix the underlying Mesa nv30 bug;
+# it stops that bug from being fatal to everything else.
+#
+# ⚠ Best effort on purpose: never fail the display setup. lightdm treats a
+# non-zero exit here as the display failing to start.
+for p in $(pgrep -x Xorg 2>/dev/null); do
+    echo 0 > "/proc/$p/oom_score_adj" 2>/dev/null || true
+done
+exit 0

@@ -26,7 +26,13 @@
     echo "--- framebuffers ---";        for f in /sys/class/graphics/fb*/name; do
                                             [ -e "$f" ] && echo "$f = $(cat "$f")"
                                         done
-    echo "--- modules ---";             lsmod
+    # ⛔ NOT lsmod. Reading /proc/modules NULL-derefs m_show on this machine when
+    # an unsigned out-of-tree module is loaded and takes the box down mid-boot,
+    # with no console trace — the same defect that oopses dracut. /sys is safe.
+    echo "--- modules ---";             for m in /sys/module/*/refcnt; do
+                                            [ -r "$m" ] || continue
+                                            d=${m%/refcnt}; echo "${d##*/} $(cat "$m")"
+                                        done
     echo "--- network ---";             ip -o addr show scope global 2>&1
     echo "--- nm devices ---";          nmcli -t -f DEVICE,TYPE,STATE device 2>&1
     echo "--- services ---";            sv status /var/service/* 2>&1

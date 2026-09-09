@@ -146,12 +146,25 @@ LOCALREPO_ARG=""
 # identical to never having built one — and the image then ships stock nouveau
 # without complaining. Caught only by reading the build's own output.
 LOCALREPO_DIR="out/${EMBER_ID}-repo-$ARCH"
-if ls "$LOCALREPO_DIR"/linux*.xbps >/dev/null 2>&1; then
-    echo "   local   patched kernel found in $LOCALREPO_DIR"
+# ⛔ NOT kernel-only. This check used to be `ls linux*.xbps` and its message
+# only ever mentioned the kernel — so patched MESA sitting one directory away
+# was invisible to the build and every image shipped Void's stock mesa while
+# reporting nothing at all. The nv30 index-buffer fix is as load-bearing as the
+# kernel's: without it glamor's indexed VBO draws corrupt menu glyphs and the
+# cursor, which is the artefacting this project spent days on.
+if ls "$LOCALREPO_DIR"/*.xbps >/dev/null 2>&1; then
+    echo "   local   $(ls "$LOCALREPO_DIR"/*.xbps | wc -l) package(s) in $LOCALREPO_DIR:"
+    for _p in linux6.18 mesa mesa-dri mesa-libgallium libgbm Thunar; do
+        _f=$(ls "$LOCALREPO_DIR/$_p"-[0-9]*.xbps 2>/dev/null | head -1)
+        [ -n "$_f" ] && echo "           $(basename "$_f")"
+    done
     LOCALREPO_ARG="-R /localrepo"
     LOCALREPO_MOUNT="-v $PWD/$LOCALREPO_DIR:/localrepo"
 else
-    echo "   local   no patched kernel (run build/mk-kernel.sh for the nv4x fixes)"
+    echo "   local   nothing in $LOCALREPO_DIR"
+    echo "           the image will ship STOCK kernel and STOCK mesa — no nv4x fixes."
+    echo "           build/mk-kernel.sh builds the kernel; the mesa packages come"
+    echo "           from xbps-src (see tools/install-mesa-fix.sh) and are copied in."
     LOCALREPO_MOUNT=""
 fi
 
@@ -245,6 +258,34 @@ ENDPY
 # Written only here: after xbps returned, after the architecture of every ELF in
 # the tree was verified. Anything earlier would stamp a tree that is not done.
 printf '%s\n' "$ARCH $TIER $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAMP"
+
+# ── what the patched set resolved to, in the tree that was actually built ──
+#
+# ⛔ SAY IT OUT LOUD, EVERY BUILD. Both times a fix went missing it was invisible:
+# the package simply was not there, xbps resolved the stock one, and the build
+# reported success. A local repo listed first only wins if the package is IN it,
+# and nothing downstream ever checks. This prints what the image will ship.
+#
+# ⚠ EVERY LOCALLY BUILT PACKAGE BELONGS ON THIS LIST. It started as the nv4x set
+# and Thunar joined it; a patched package that is not named here is one whose
+# absence goes back to being silent, which is the whole failure this exists for.
+echo
+echo "patched packages in this rootfs:"
+docker run --rm -v "$PWD/$ROOTFS:/rootfs" -e XBPS_ARCH="$ARCH" "$VOID_IMAGE" \
+    /bin/sh -c 'xbps-query -r /rootfs -l 2>/dev/null |
+                awk "{print \$2}" |
+                grep -E "^(linux6\.18|mesa|mesa-dri|mesa-libgallium|libgbm|Thunar)-[0-9]"' |
+while read -r pkg; do
+    case "$pkg" in
+        linux6.18-*_99)        echo "   $pkg   patched (nouveau fence_sema/accel_move)" ;;
+        linux6.18-*)           echo "   $pkg   ⚠ STOCK — no fence_sema=, the nv4x freeze is NOT fixed" ;;
+        mesa-26.1.8_[6-9]*|mesa-dri-26.1.8_[6-9]*|mesa-libgallium-26.1.8_[6-9]*|libgbm-26.1.8_[6-9]*)
+                               echo "   $pkg   patched (nv30 idxbuf relocation)" ;;
+        mesa*|libgbm*)         echo "   $pkg   ⚠ STOCK — menu/cursor artefacting on nv30" ;;
+        Thunar-*_99)           echo "   $pkg   patched (statusbar timeout freed on destroy)" ;;
+        Thunar-*)              echo "   $pkg   ⚠ STOCK — the exo-CRITICAL flood and the per-window view leak are back" ;;
+    esac
+done
 
 echo
 echo "rootfs built: $ROOTFS"

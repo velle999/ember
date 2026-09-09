@@ -58,6 +58,7 @@ install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
 install -Dm755 /installer/ember-expand-root /mnt/usr/bin/ember-expand-root
+install -Dm755 /installer/ember-xorg-oom-reset /mnt/usr/libexec/ember-xorg-oom-reset
 # ⚠ OPTIONAL AND GITIGNORED. Drop a NetworkManager keyfile at
 # installer/wifi.nmconnection and every image built afterwards joins the network
 # on first boot — which is the difference between a headless machine you can ssh
