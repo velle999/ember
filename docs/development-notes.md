@@ -506,6 +506,38 @@ there afterwards. ⚠ That file belongs to Void's lightdm package, so an upgrade
 drops a `.pacnew` and reverts it on an installed machine.
 
 
+## ✅ RESOLVED: the desktop shipped in the C locale (2026-09-08)
+
+⛔ **Naming a locale is not having one.** `/etc/locale.conf` said
+`LANG=en_US.UTF-8`, `glibc-locales` was installed, and every line of
+`/etc/default/libc-locales` was still commented out — so `xbps-reconfigure`
+generated nothing. On the 2026-09-08 image and on the machine installed from it:
+
+    $ locale -a
+    C
+    C.utf8
+    POSIX
+
+The whole desktop therefore ran in C: no UTF-8 collation, no locale-aware
+formatting, and a file manager that sorts and cases non-ASCII filenames wrong —
+on a distribution whose stated purpose is running other people's old software.
+
+⚠ **The symptom was in plain sight and read as noise.** Every GTK application
+logged it, thousands of times, in the same `.xsession-errors` as everything
+else:
+
+    Gtk-WARNING **: Locale not supported by C library. Using the fallback 'C' locale.
+
+`build/_chroot-setup.sh` now uncomments the locale **named in `locale.conf`**
+rather than a hardcoded one — the generated locale and the one the session asks
+for are the same fact, and writing it twice is how they drift — runs
+`xbps-reconfigure -f glibc-locales`, and **fails the build** if `locale -a` still
+does not list it afterwards. ⚠ The comparison is on the normalised name:
+`en_US.UTF-8` comes back from `locale -a` as `en_US.utf8`, and a literal compare
+fails against a locale that is present and correct. `LC_COLLATE=C` in that file
+is deliberate and stays; it is a sort order, not a missing locale.
+
+
 ## The Raspberry Pi's display
 
 vc4 KMS works: it binds every component, registers a DRM device, and X runs on

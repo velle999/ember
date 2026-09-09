@@ -47,6 +47,58 @@ mkdir -p /etc/sudoers.d
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
 
+# ── the locale the image asked for and never generated ──────────────────────
+#
+# ⛔ NAMING A LOCALE IS NOT HAVING ONE. /etc/locale.conf says LANG=en_US.UTF-8,
+# glibc-locales is installed, and every line of /etc/default/libc-locales is
+# commented out — so xbps-reconfigure generated nothing and /usr/lib/locale held
+# exactly one entry, C.utf8. Measured on the 2026-09-08 image and on the machine
+# installed from it: `locale -a` returned C, C.utf8, POSIX and nothing else.
+#
+# The symptom is in every GTK application's output, thousands of times over,
+# which is why it read as noise rather than as a fault:
+#
+#     Gtk-WARNING **: Locale not supported by C library. Using the fallback 'C' locale.
+#
+# The whole desktop therefore runs in C: no UTF-8 collation, no locale-aware
+# formatting, and a file manager that sorts and cases non-ASCII filenames wrong
+# on a distribution whose stated purpose is running other people's old software.
+#
+# ⚠ READ FROM locale.conf, NOT HARDCODED. The generated locale and the one the
+# session asks for are the same fact, and writing it twice is how they drift —
+# the same reason the nouveau parameters are asked of the module rather than
+# assumed. LC_COLLATE=C in that file is deliberate and stays; it is a sort
+# order, not a missing locale.
+if [ -f /etc/default/libc-locales ]; then
+    LOC=$(sed -n 's/^LANG=//p' /etc/locale.conf 2>/dev/null | head -1)
+    if [ -n "$LOC" ]; then
+        # The file lists them as "en_US.UTF-8 UTF-8" behind a '#'. Match the
+        # name at a word boundary so en_US.UTF-8 cannot also enable something
+        # that merely starts with it.
+        sed -i "s/^#[[:space:]]*\($(echo "$LOC" | sed 's/[.]/[.]/g')[[:space:]]\)/\1/" \
+            /etc/default/libc-locales
+        grep -q "^$LOC[[:space:]]" /etc/default/libc-locales || {
+            echo "chroot-setup: $LOC is not listed in /etc/default/libc-locales" >&2
+            exit 1; }
+        xbps-reconfigure -f glibc-locales
+
+        # ⚠ VERIFIED, BECAUSE THE FAILURE MODE IS A WARNING NOBODY READS. locale
+        # -a normalises the name — en_US.UTF-8 comes back as en_US.utf8 — so the
+        # comparison is done on the normalised form or it fails against a locale
+        # that is present and correct.
+        want=$(echo "$LOC" | tr 'A-Z' 'a-z' | tr -d '-')
+        locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' | grep -qx "$want" || {
+            echo "chroot-setup: $LOC still not generated after xbps-reconfigure" >&2
+            locale -a >&2
+            exit 1; }
+        echo "chroot-setup: locale $LOC generated"
+    else
+        echo "chroot-setup: /etc/locale.conf names no LANG — locale not generated" >&2
+    fi
+else
+    echo "chroot-setup: no /etc/default/libc-locales — not a glibc image, locale skipped"
+fi
+
 # ── the bootloader, which is the ONLY part that differs ─────────────────────
 case "$BOOTLOADER" in
 grub)
