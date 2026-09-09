@@ -16,9 +16,11 @@
 #
 # ── How it differs, mechanically ────────────────────────────────────────────
 #
-# The .img is the rootfs, laid down on a partition. An ISO cannot be that: it is
-# read-only, and a Linux system needs to write. So the rootfs becomes a squashfs
-# and dracut's dmsquash-live stacks a RAM-backed overlay on top of it.
+# The .img is a configured Ember laid down on a partition. An ISO cannot be that:
+# it is read-only, and a Linux system needs to write. So THAT SAME TREE becomes a
+# squashfs and dracut's dmsquash-live stacks a RAM-backed overlay on top of it.
+# ⛔ It is built from the .img and not from out/rootfs — see _mkiso-inside.sh for
+# what happened the one time it was not.
 #
 # ⚠ THE OVERLAY IS IN RAM AND THIS IS A 2 GB MACHINE. That was nearly a
 # non-starter: before the nv30 pixmap leak was fixed an idle desktop sat at
@@ -28,7 +30,7 @@
 # path to absorb what it is not. Do not raise OVERLAY_MB without re-measuring;
 # it comes straight out of what the desktop has to live in.
 #
-# ⚠ Squashfs also makes it FIT: ~4.7 GB of rootfs compresses to roughly 2 GB,
+# ⚠ Squashfs also makes it FIT: a ~5.3 GB tree compresses to roughly 2 GB,
 # which is a single-layer DVD with room to spare. The .img is 6.2 GB and is not.
 #
 #     build/mkiso.sh i686 desktop
@@ -41,23 +43,24 @@ cd "$(dirname "$0")/.."
 ARCH=${1:-i686}
 TIER=${2:-desktop}
 OUT="out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER"
-ROOTFS="$OUT/rootfs"
+IMG="$OUT/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER.img"
 ISO="$OUT/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER.iso"
 
 # ⚠ The COW overlay, in MB, carved out of RAM at boot. See the header.
 OVERLAY_MB=${EMBER_OVERLAY_MB:-512}
 
 [ "$ARCH" = i686 ] || { echo "mkiso: only i686 for now — the Pi boots differently" >&2; exit 2; }
-[ -d "$ROOTFS" ] || { echo "mkiso: no rootfs at $ROOTFS — run build/mkrootfs.sh first" >&2; exit 1; }
-# ⛔ Same stamp check as mkimage.sh, and for the same reason: a directory is not
-# a finished rootfs, and squashing a half-written one produces an ISO that boots
-# and is quietly missing whatever had not downloaded yet.
-[ -f "$ROOTFS/.ember-rootfs-complete" ] || {
-    echo "mkiso: $ROOTFS has no completion stamp — mkrootfs.sh did not finish" >&2; exit 1; }
+# ⛔ THE SOURCE IS THE .img, NOT out/rootfs. out/rootfs is the package tree
+# before any configuration: no ember account, no enabled lightdm, no
+# ember-install. An ISO built from it boots to an agetty that rejects every
+# password, and passes every structural check while doing so. See
+# build/_mkiso-inside.sh.
+[ -f "$IMG" ] || {
+    echo "mkiso: no image at $IMG — run build/mkimage.sh $ARCH $TIER first" >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "mkiso: the docker daemon is not running" >&2; exit 1; }
 
 echo "== $EMBER_NAME $EMBER_VERSION — $ARCH / $TIER, ISO"
-echo "   rootfs   $ROOTFS"
+echo "   source   $IMG"
 echo "   overlay  ${OVERLAY_MB} MB in RAM"
 echo "   iso      $ISO"
 
@@ -69,6 +72,7 @@ docker run --rm --privileged \
     -v "$PWD/$OUT:/out" \
     -v "$PWD/build/_mkiso-inside.sh:/mkiso-inside.sh:ro" \
     -e ISONAME="$(basename "$ISO")" \
+    -e IMGNAME="$(basename "$IMG")" \
     -e HOSTNAME_="$EMBER_ID" \
     -e EMBER_NAME="$EMBER_NAME" \
     -e EMBER_VERSION="$EMBER_VERSION" \
