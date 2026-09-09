@@ -52,6 +52,20 @@ mkdir -p "$LOWER" "$LIVE"
 
 LOOP=$(losetup --find --show -P "$IMG")
 
+# ⛔ INSTALL THE TRAP HERE, BEFORE ANYTHING CAN FAIL. It used to be set after the
+# mount, so a failed mount exited without ever running it and left the loop
+# device attached to the image. The next run then found a STALE /dev/loop0p1 --
+# /dev is bind-mounted from the host -- and failed differently:
+#     fsconfig() failed: /dev/loop0p1: Can't lookup blockdev
+# One leak thus poisons every later build, which is a miserable thing to debug.
+cleanup() {
+    umount "$LIVE/var/tmp/ember-dracut" 2>/dev/null || true
+    for d in dev proc sys; do umount "$LIVE/$d" 2>/dev/null || true; done
+    umount "$LOWER" 2>/dev/null || true
+    [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # ⛔ THE PARTITION NODE DOES NOT EXIST THE INSTANT losetup RETURNS. -P asks the
 # kernel to scan the partition table, udev then creates ${LOOP}p1, and mounting
 # in between fails with
@@ -61,23 +75,25 @@ LOOP=$(losetup --find --show -P "$IMG")
 # It is a race, so it passes most of the time and fails on a loaded machine --
 # which is exactly the build that matters. Wait for the node instead of assuming
 # it, and nudge the scan if it has not happened.
+# ⛔ ASK SYSFS, NOT /dev. /dev is bind-mounted from the host, so a node left
+# behind by an earlier run satisfies `[ -b /dev/loop0p1 ]` while the kernel has
+# no such partition -- and the mount then fails with
+#     fsconfig() failed: /dev/loop0p1: Can't lookup blockdev
+# /sys/block/<loop>/<loop>p1 only exists once the kernel has really scanned it.
+LB=$(basename "$LOOP")
 i=0
-while [ ! -b "${LOOP}p1" ]; do
+while [ ! -d "/sys/block/$LB/${LB}p1" ]; do
     i=$((i + 1))
-    [ "$i" -gt 40 ] && { echo "mkiso: ${LOOP}p1 never appeared" >&2; losetup -d "$LOOP"; exit 1; }
+    [ "$i" -gt 40 ] && { echo "mkiso: ${LOOP}p1 never appeared in sysfs" >&2; exit 1; }
     [ "$i" = 5 ] && { partx -a "$LOOP" 2>/dev/null || partprobe "$LOOP" 2>/dev/null || true; }
     command -v udevadm >/dev/null && udevadm settle --timeout=2 2>/dev/null || sleep 0.25
 done
+# and make sure the /dev node matches the kernel's idea of it
+if command -v udevadm >/dev/null; then udevadm trigger --name-match="$LB" 2>/dev/null || true; udevadm settle --timeout=5 2>/dev/null || true; fi
+[ -b "${LOOP}p1" ] || { echo "mkiso: no device node ${LOOP}p1" >&2; exit 1; }
 
 mount -o ro "${LOOP}p1" "$LOWER"
 
-cleanup() {
-    umount "$LIVE/var/tmp/ember-dracut" 2>/dev/null || true
-    for d in dev proc sys; do umount "$LIVE/$d" 2>/dev/null || true; done
-    umount "$LOWER" 2>/dev/null || true
-    [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 # ⛔ A REAL COPY, NOT AN OVERLAY. An overlayfs merge of the image was the obvious
 # way to get a writable tree without touching the .img, and dracut cannot build
@@ -236,9 +252,26 @@ echo "inside: tree verified — account, services, installer, mount points"
 #
 # and every sysctl in 05-misc.sh failed. ⚠ Only a real boot showed this — the
 # ISO passed every structural check with the directories missing.
+# ⛔ zstd AND NOT xz, AND -b 128K AND NOT 1M. This is the difference between a
+# live medium you can use and one you cannot. Measured on the reference Pentium 4
+# (3.0 GHz, SSE2 only, no SSSE3) reading binaries out of an xz/1M squashfs:
+#
+#     real 41.5s   user 0.06s   sys 30.9s
+#
+# Three quarters of the wall time is the KERNEL decompressing, not the DVD --
+# iowait was a distant second. xz is the worst possible choice for a CPU of this
+# era, and 1 MB blocks compound it: every 4 KB file read decompresses a full
+# megabyte. zstd decompresses several times faster at a comparable ratio, and
+# its speed does not depend on the compression level, so the level costs build
+# time here and nothing on the target.
+#
+# ⚠ The ISO gets bigger. That is affordable -- a single-layer DVD is 4.7 GB and
+# the xz image was 2.4 GB -- but check it still fits; mkiso.sh warns if not.
+# ⚠ CONFIG_SQUASHFS_ZSTD=y in this kernel, verified on the reference machine.
+# The qemu boot test is what proves the initramfs can actually mount it.
 echo "inside: squashing the tree (this is the slow part)"
 mksquashfs "$LIVE" "$BUILD/LiveOS/squashfs.img" \
-    -comp xz -b 1M -no-progress >/dev/null
+    -comp zstd -Xcompression-level 15 -b 128K -no-progress >/dev/null
 
 # ── isolinux, because this has to boot a 2003 BIOS ──────────────────────────
 #
@@ -259,6 +292,17 @@ CMDLINE="root=live:CDLABEL=EMBER rd.live.image rd.overlay rd.live.overlay.size=$
 GFX="nouveau.vram_pushbuf=0 nouveau.accel_move=1 nouveau.fence_sema=0 ttm.dma32_pages_limit=65536"
 CONSOLE="loglevel=4 console=tty0 console=ttyS0,115200"
 
+# ⛔ THE PROPRIETARY DRIVER NEEDS nouveau BLACKLISTED BEFORE THE INITRAMFS, not
+# unloaded afterwards. 304 cannot initialise a card nouveau has already
+# programmed -- RmInitAdapter fails, /dev/nvidia0 returns EIO and X exits with
+# "no screens found". Blacklisted, the same card comes up with no NVRM error.
+# ⚠ Both spellings are needed: rd.driver.blacklist for dracut's own module
+# loading, modprobe.blacklist for everything after switch_root.
+# ⚠ It is a SEPARATE MENU ENTRY and not the default because on a card 304 does
+# not support, blacklisting nouveau leaves no driver at all -- and a live medium
+# meets cards nobody has tested.
+NVIDIA="rd.driver.blacklist=nouveau modprobe.blacklist=nouveau ember.gpu=nvidia"
+
 cat > "$BUILD/isolinux/isolinux.cfg" <<CFG
 UI vesamenu.c32
 PROMPT 0
@@ -271,10 +315,20 @@ LABEL ember
     KERNEL vmlinuz
     APPEND initrd=initrd.img $CMDLINE $GFX $CONSOLE
 
+LABEL embernvidia
+    MENU LABEL $EMBER_NAME with the NVIDIA proprietary driver (304)
+    KERNEL vmlinuz
+    APPEND initrd=initrd.img $CMDLINE $NVIDIA $CONSOLE
+
+LABEL embernouveau
+    MENU LABEL $EMBER_NAME with the open driver (nouveau)
+    KERNEL vmlinuz
+    APPEND initrd=initrd.img $CMDLINE $GFX ember.gpu=nouveau $CONSOLE
+
 LABEL embersafe
     MENU LABEL $EMBER_NAME with no acceleration
     KERNEL vmlinuz
-    APPEND initrd=initrd.img $CMDLINE nomodeset $CONSOLE
+    APPEND initrd=initrd.img $CMDLINE ember.gpu=nouveau nomodeset $CONSOLE
 CFG
 
 # ── the ISO itself ──────────────────────────────────────────────────────────

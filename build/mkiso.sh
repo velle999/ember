@@ -82,6 +82,21 @@ docker run --rm --privileged \
 echo
 echo "iso: $ISO"
 ls -lh "$ISO"
+
+# ⛔ THE WHOLE POINT IS THAT IT BURNS TO A DISC. A single-layer DVD holds
+# 4,700,000,000 bytes. The squashfs is zstd rather than xz because a Pentium 4
+# cannot decompress xz fast enough to use the medium (see _mkiso-inside.sh), and
+# that trade costs size -- so the size is checked rather than assumed.
+ISO_BYTES=$(stat -c %s "$ISO")
+DVD_BYTES=4700000000
+if [ "$ISO_BYTES" -gt "$DVD_BYTES" ]; then
+    echo
+    echo "⛔ $((ISO_BYTES / 1000 / 1000)) MB will NOT fit a single-layer DVD" >&2
+    echo "   (4700 MB). Either drop a package tier or raise the zstd level in" >&2
+    echo "   build/_mkiso-inside.sh -- level costs build time, not target speed." >&2
+    exit 1
+fi
+echo "   $((ISO_BYTES / 1000 / 1000)) MB of the 4700 MB a single-layer DVD holds"
 echo
 echo "Burn it, or write it to a stick — it is isohybrid, so both work:"
 echo "    xorriso -as cdrecord -v dev=/dev/sr0 blank=fast \"$ISO\""
