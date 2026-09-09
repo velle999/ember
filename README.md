@@ -11,7 +11,7 @@ Wine. **x86_64 is deliberately not a target.**
 | **Targets** | `i686` (Pentium 4 and later 32-bit x86), `aarch64` (Raspberry Pi 4 / 5) |
 | **Base** | Void Linux — glibc, runit, rolling |
 | **Desktop** | XFCE, or an IceWM tier for ~1 GB machines |
-| **Status** | both targets run on real hardware; the GeForce 7 3D freeze is fixed |
+| **Status** | both targets run on real hardware; the GeForce 7 3D freeze and the driver memory leak behind it are fixed |
 
 Not a distribution from scratch: a package set, a desktop configuration, an
 image builder and an installer, on top of a base that already does the hard
@@ -32,6 +32,13 @@ Raspberry Pi 4:
 - **Hardware OpenGL** on the GeForce, and **stable under sustained 3D** — the
   nv4x driver bug that froze the desktop is fixed (see below); ten unthrottled
   `glxgears` rounds at ~1100 FPS with zero kernel errors
+- **A desktop that survives being left alone.** The `nv30` driver leaked a
+  buffer per render target, so the X server grew ~38 MB/s whenever anything
+  animated — a blank screensaver exhausted 2 GB and killed the session in two
+  minutes. Fixed in Mesa; 6h48m and a suspend/resume cycle later, memory is flat
+- **The graphical installer**, accelerated. It used to die partway through its
+  own copy: 9.1 GB now copies with the progress meter redrawing throughout and
+  the X server growing 2 MB
 - **Windows games under Wine**, accelerated: Return to Castle Wolfenstein,
   Quake II, Unreal Tournament 99
 - **Native 3D**: SuperTuxKart
@@ -112,6 +119,26 @@ Builds `linux6.18` with the nouveau nv4x patches into `out/ember-repo-i686`,
 which `mkrootfs.sh` then installs from. ~40 minutes and it wants 25 GB free —
 it checks first and refuses rather than dying at the last step. Only needed when
 the patches change; images build fine without it.
+
+### The patched userspace packages (also optional, also slow)
+
+    build/mk-mesa.sh        # nv30: idxbuf relocation + the surface refcount leak
+    build/mk-thunar.sh      # the statusbar timeout that outlived its window
+
+Same arrangement: both land in `out/ember-repo-i686` and `mkrootfs.sh` installs
+from there if present. ⚠ **These are in the rootfs, not the image layer**, so a
+change to either needs `mkrootfs.sh` *and* `mkimage.sh` — rebuilding only the
+image produces one that looks updated and ships the old package.
+
+`mkrootfs.sh` prints what the patched set resolved to in the tree it actually
+built, and says `⚠ STOCK` for anything that fell back. Read that line: an image
+with stock Mesa and the shipped X config has a graphical installer that cannot
+finish.
+
+    build/mk-mesa-trace.sh  # the same Mesa, instrumented, for the next leak
+
+Diagnostic only, built at a revision *below* the shipping one so it can never
+win a dependency resolution by accident.
 
 ## Installing
 
@@ -194,7 +221,8 @@ out-of-memory kills             9          0
 
 ### What it took
 
-Four independent problems, each of which had to be found separately.
+Six independent problems, each of which had to be found separately — four in
+the kernel, and two in Mesa below them.
 
 **1. The push buffers were in the wrong place.** `nouveau.vram_pushbuf=1` puts the
 GPU command buffer in video memory, behind the AGP aperture. Intermittently the
@@ -231,6 +259,27 @@ host running TTM, not just this card. **Ember sets this by default.**
 when it drains after an error, with no rate limit. On a single-core machine that
 flood alone is enough to livelock the box —
 `patches/nouveau-nv04-fifo-ratelimit-and-runout.patch`.
+
+### And two more in Mesa, in userspace
+
+The four above are kernel bugs. The `nv30` Gallium driver had two of its own,
+and both ship as patches here:
+
+**5. An indexed draw with an unrelocated index buffer.** The index buffer is
+bound after `nv30_state_validate()` runs, so its relocation pair is never
+emitted and `IDXBUF_OFFSET` reaches the engine as a bare offset. The engine
+fetches indices from unrelated video memory: `DMA_VTX_PROTECTION`, on every
+indexed VBO draw, deterministically. Presents as corrupt menu glyphs and cursor.
+
+**6. A resource reference leaked on every render target.**
+`nv30_miptree_surface_new()` takes a reference on the resource it wraps;
+`nv30_miptree_surface_del()` frees the surface without dropping it. The miptree
+never reaches refcount zero, so its memory is never released — the X server grew
+about 38 MB/s whenever anything drew, and only gave it back when X exited. A
+screensaver took a 2 GB machine down in two minutes; the graphical installer
+died partway through its own copy. `nv50_surface_destroy()` in the sibling
+driver has the missing line. Found by instrumenting the allocation sites and
+counting, after four plausible theories about the cause turned out to be wrong.
 
 ### The fixes ship as a kernel package, not a loose module
 
@@ -317,8 +366,18 @@ info` in 0.06 s.
 
 ## Not done yet
 
-- **The nouveau patches are not upstream.** They build and they are verified on
-  hardware, but they are carried here, not in Void or in mainline.
+- **None of the patches are upstream** — the four nouveau ones or the two Mesa
+  ones. They build and they are verified on hardware, but they are carried here,
+  not in Void, mainline or Mesa.
+- **The proprietary driver was never actually ruled out.** This README and
+  `docs/target-p4.md` used to say the 304.xx route was closed; it is not. The
+  kernel module builds against this tree's own 6.18 kernel — verified. What
+  stops it is that 304.137 needs a 2017 X server, so taking it means carrying
+  `xorg-server` 1.19 for the i686 tier. Written up as a fallback, with the order
+  of work, in [target-p4.md](docs/target-p4.md).
+- **`linux6.18-headers` is missing `arch/x86/entry/syscalls/`**, so the kernel's
+  `archheaders` step fails for *any* out-of-tree module built against it. Found
+  while testing the above; unrelated to nvidia and unfixed.
 - **One machine, one card.** The nv4x result is verified on a GeForce 7600 GS
   under deliberate load, not across the card list it should apply to.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
