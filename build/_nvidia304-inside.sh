@@ -84,6 +84,7 @@ CFLAGS="-O2 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-d
 ./configure --prefix=/opt/x11-19 --enable-glamor --enable-dri2 --enable-dri3 \
   --enable-glx --enable-xorg --disable-xwayland --disable-xnest --disable-xephyr \
   --disable-xvfb --enable-systemd-logind --with-xkb-path=/usr/share/X11/xkb \
+  --disable-libunwind \
   --with-xkb-output=/var/lib/xkb --disable-docs --disable-devel-docs \
   >/work/configure.log 2>&1
 make -j"$(nproc)" >/work/make.log 2>&1 || { echo "XSERVER BUILD FAILED"; grep -nE "error:" /work/make.log | head -10; exit 1; }
@@ -132,7 +133,60 @@ Section "Files"
     ModulePath "/opt/x11-19/lib/xorg/modules"
     ModulePath "/opt/x11-19/lib/xorg/modules/drivers"
 EndSection
+
+# ⛔ WITHOUT THIS THE DRIVER IS PRESENT AND UNUSED. The server finds every
+# device through udev and says "No input driver specified, ignoring this
+# device", because the rules that normally assign libinput live in
+# /usr/share/X11/xorg.conf.d/40-libinput.conf and this server reads its own
+# prefix, not the system's. Shipping the driver is not enough; it has to be
+# asked for.
+Section "InputClass"
+    Identifier  "libinput all"
+    MatchDevicePath "/dev/input/event*"
+    Driver      "libinput"
+EndSection
 EOF
+
+# ── the input driver ────────────────────────────────────────────────────────
+#
+# ⛔ WITHOUT THIS THERE IS NO MOUSE AND NO KEYBOARD. The server finds the
+# devices through udev and then says "No input driver specified, ignoring this
+# device" for every one of them, because an input driver is ABI-locked and the
+# system's libinput_drv.so is built for xorg-server 21.1. This server is ABI
+# XInput 24.1. The Arch instructions say the same thing in the form "downgrade
+# xf86-input-libinput or the keyboard and mouse did not work".
+#
+# ⚠ Built against the SDK we just staged, not the system one — PKG_CONFIG_PATH
+# points at /work/stage/opt/x11-19/lib/pkgconfig so xorg-server.pc resolves to
+# the 1.19 tree and the module lands in its own modules/input directory.
+echo "   input driver"
+# ⚠ THE SYSTEM PATH MUST STAY ON PKG_CONFIG_PATH. Setting it to the 1.19 tree
+# alone makes xorg-server.pc resolve and then fail on its own dependency:
+# "Package pixman-1, required by xorg-server, not found".
+xbps-install -Sy libinput-devel libevdev-devel mtdev-devel pixman-devel libdrm-devel >/dev/null 2>&1
+cd /work
+# ⚠ .tar.bz2 — x.org only switched this driver to .tar.xz at 1.2.1, and 1.1.0
+# is the last version the fork pairs with 1.19.
+LIBIN=xf86-input-libinput-1.1.0
+[ -f "$LIBIN.tar.bz2" ] || curl -fsSL -O \
+  "https://www.x.org/releases/individual/driver/$LIBIN.tar.bz2"
+rm -rf "$LIBIN" && tar xf "$LIBIN.tar.bz2" && cd "$LIBIN"
+# ⛔ NOT PKG_CONFIG_PATH. 1.19's xorg-server.pc has Requires.private naming the
+# old split protocol packages AND dri.pc, which modern Mesa does not ship — so
+# pkg-config can never resolve it, whatever the path. X input modules are
+# dlopened and link nothing from the server, so the SDK headers alone suffice,
+# which is what configure itself suggests when it fails.
+XORG_CFLAGS="-I/work/stage/opt/x11-19/include/xorg $(pkg-config --cflags pixman-1 libdrm)" \
+XORG_LIBS=" " \
+CFLAGS="-O2 -Wno-error=incompatible-pointer-types -Wno-error=int-conversion" \
+./configure --prefix=/opt/x11-19 \
+  --with-xorg-module-dir=/opt/x11-19/lib/xorg/modules \
+  >/work/input-configure.log 2>&1 || { echo "INPUT CONFIGURE FAILED"; tail -15 /work/input-configure.log; exit 1; }
+make -j"$(nproc)" >/work/input-make.log 2>&1 || { echo "INPUT BUILD FAILED"; grep -nE "error:" /work/input-make.log | head -8; exit 1; }
+make install DESTDIR=/work/stage >/dev/null 2>&1
+ls /work/stage/opt/x11-19/lib/xorg/modules/input/libinput_drv.so >/dev/null 2>&1 \
+  && echo "     libinput_drv.so built against ABI 24.1" \
+  || { echo "INPUT DRIVER MISSING AFTER INSTALL"; exit 1; }
 
 cd /work/stage && tar czf /out/x11-19.tar.gz opt
 echo "     x11-19.tar.gz $(du -h /out/x11-19.tar.gz | cut -f1)"

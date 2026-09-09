@@ -108,14 +108,22 @@ past the ground that fork tests on (Arch, gcc 12/13, kernel ≤6.15):
 `0018_CVE-2021-3472` and `0067_CVE-2025-49177`. Both are security patches. If
 this route is ever taken for real, that is not a detail to skip past.
 
-⚠ **PERFORMANCE IS STILL UNMEASURED, AND THE OBVIOUS NUMBER IS A TRAP.**
+✅ **AND IT IS FASTER — MEASURED THE ONLY WAY THAT MATTERS.** 2026-09-09, on the
+reference machine, in real use rather than a benchmark: **YouTube playback holds
+sync at 360p under 304, where nouveau managed only 144p.** That is a
+user-visible capability change on the workload this machine exists for, and it
+is the first evidence that the reason to want 304 is real rather than assumed.
+It is consistent with the mechanism: nouveau has no working reclocking for nv4x,
+so the GPU sits at boot clocks; 304 clocks it properly.
+
+⚠ **The synthetic numbers, by contrast, were a trap and are not evidence.**
 glxgears read 3.5 FPS with the console blanked and 54 FPS awake, and
 `__GL_SYNC_TO_VBLANK=0` did not take, so it was vsync-capped throughout — with
 glxgears at 96% CPU and Xorg at 0.7%, the P4's CPU was the bottleneck, not the
 GPU. Comparing any of that against the nouveau baseline of ~1100 unthrottled FPS
-would be worthless. **The reason to want 304 — reclocking, mature 3D — is still
-an assumption.** Measuring it needs a real install and the same method as the
-baseline, not the hand-rolled prefix used here.
+would be worthless. Comparing them would have been worthless — and would have
+said 304 was *slower*, which the real workload shows it is not. A synthetic
+number taken carelessly is worse than no number.
 
 ⛔ **AND SHIPPING IT ARMS A KERNEL BUG THIS PROJECT ALREADY FOUND.** `nvidia.ko`
 is an unsigned out-of-tree module, and on this machine that is exactly the

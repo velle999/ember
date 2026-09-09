@@ -77,13 +77,40 @@ WARN
         sleep 12
         # ⚠ The bracket keeps this pattern from matching ember-gpu's own command
         # line — pkill/pgrep -f will happily match the shell that runs them.
-        if pgrep -f "[x]11-19/bin/Xorg" >/dev/null; then
-            echo "X is running on :2 (vt8). chvt 8 to see it."
-            echo "  DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia glxinfo -B"
-        else
+        if ! pgrep -f "[x]11-19/bin/Xorg" >/dev/null; then
             echo "X did not start — see /var/log/Xorg.304.log" >&2
             exit 1
-        fi ;;
+        fi
+
+        # ⛔ AND A SESSION ON IT, OR THERE IS NOTHING TO SEE. A bare X server
+        # draws a root window and a cursor, which is exactly what "it worked"
+        # looks like and is indistinguishable from "it is broken". The first
+        # version of this shipped without it and the report back was, fairly,
+        # "I'm just getting a cursor".
+        #
+        # ⚠ LD_LIBRARY_PATH is set for the whole session so every GL client
+        # under it — glxgears, RetroArch, anything — links the 304 libGL rather
+        # than Mesa's. Without it the desktop comes up and 3D silently does not.
+        U=${SUDO_USER:-ember}
+        id "$U" >/dev/null 2>&1 || U=ember
+        echo "starting a desktop for $U on :2"
+        su - "$U" -c "env DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia \
+             dbus-run-session xfce4-session" >/tmp/ember-gpu-session.log 2>&1 &
+        sleep 8
+        if pgrep -u "$U" -x xfce4-session >/dev/null 2>&1; then
+            echo "desktop is up on vt8 — chvt 8 to look at it"
+        else
+            echo "the X server is up but the session did not start;"
+            echo "see /tmp/ember-gpu-session.log. The server alone shows only a cursor."
+        fi
+        cat <<EOF
+
+  switch to it:   chvt 8          (chvt 1 comes back to the console)
+  measure it:     DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia __GL_SYNC_TO_VBLANK=0 glxgears
+  ⚠ compare like for like — the nouveau baseline was unthrottled, on an awake
+    console. A blanked screen alone drops glxgears to ~3 FPS on either driver.
+EOF
+        ;;
     -h|--help) usage 0 ;;
     *) usage 2 ;;
 esac

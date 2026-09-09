@@ -40,6 +40,11 @@ thunar-archive-plugin
 # manual mount as root.
 gvfs
 udisks2
+# ⛔ kbd, for chvt/fgconsole. ember-gpu tells the user to `chvt 8` to reach the
+# alternate X server and the command was not on the image — the instruction was
+# unfollowable. loadkeys and setfont come with it, which a console-first distro
+# wants anyway.
+kbd
 xfce4-terminal
 xfce4-pulseaudio-plugin
 lightdm
