@@ -123,7 +123,26 @@ fi
 # zram becomes a way to spend all of RAM on RAM. At half of memory the worst
 # case is a full zram that simply stops accepting pages, which is the ordinary
 # out-of-swap condition rather than a new failure.
-disk_mb=$ram_mb
+#
+# ⛔ 4x RAM, AND THE FIRST VERSION OF THIS SHIPPED 1x, WHICH WAS THE WRONG KNOB.
+# Measured on the reference machine 2026-09-09 at the moment the OOM killer
+# fired: swap was completely full at 1997 MB of 2045 — and zram was holding
+# those 1980 MB in **169 MB of RAM**. That is 11.8:1, against a mem_limit of
+# 999 MB that was never remotely approached. disksize was the binding limit and
+# it was mine. Widened to 4x, the next run absorbed 3027 MB for 257 MB of RAM
+# and the OOM never happened at all.
+#
+# ⚠ mem_limit is what makes a generous disksize safe, so the two must move
+# together in the right order: raise disksize freely, leave the limit alone. If
+# the pages do not compress, zram stops at the limit and behaves like a swap
+# device that filled up. If they do — and graphics pages are largely zeros —
+# the headroom is nearly free.
+#
+# ⚠ AND IT IS HEADROOM, NOT A CURE. Against a leak this buys time and nothing
+# more: the same machine with 7.8 GB of zram still ran out, because zram's
+# storage IS RAM. It is what turned an OOM cascade that took 23 processes into
+# a single readable failure, which is worth having on its own terms.
+disk_mb=$((ram_mb * 4))
 lim_mb=$((ram_mb / 2))
 
 echo "${disk_mb}M" > "$SYS/disksize" 2>/dev/null || {

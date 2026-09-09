@@ -453,7 +453,21 @@ old whole-machine death into — *"the cost is one session instead of the whole
 machine"*, in its own comment. That fix worked. This is the other half of it.
 
 **The fix: `ember-zram`, at `07-ember-zram.sh`.** Compressed swap in RAM,
-`lzo-rle`, disksize 1× RAM, `mem_limit` half of RAM. The name sorts after
+`lzo-rle`, disksize **4× RAM**, `mem_limit` half of RAM.
+
+⛔ **It shipped at 1× first, and that was the wrong knob.** Measured 2026-09-09
+at the moment the OOM killer fired: swap completely full at 1997 MB of 2045 —
+and zram was holding those 1980 MB in **169 MB of RAM**. That is 11.8:1, against
+a `mem_limit` of 999 MB that was never approached. `disksize` was the binding
+limit. Widened to 4×, the next run absorbed 3027 MB for 257 MB of RAM and did
+not OOM at all. ⚠ `mem_limit` is what makes a generous disksize safe: raise
+disksize freely and leave the limit alone.
+
+⚠ **And it is headroom, not a cure.** Against a leak it buys time and nothing
+more — the same machine with 7.8 GB of zram still ran out, because zram's
+storage *is* RAM. What it bought was worth having anyway: it turned an OOM
+cascade that took 23 processes into one readable failure with a backtrace. The
+leak itself is [the glamor/nv30 one](#-resolved-the-graphical-installer--glamor-on-nv30-leaks-pixmaps-2026-09-09). The name sorts after
 `07-ember-swap.sh` in stage 1's glob, which is the whole ordering mechanism: the
 swapfile gets its go first and zram stands down whenever it succeeded, so an
 installed system is untouched. Verified on the P4 2026-09-08:
