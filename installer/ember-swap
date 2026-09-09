@@ -21,13 +21,24 @@ set -eu
 
 SWAP=/swapfile
 
+# ⛔ SAY WHY IT DECLINED. Every path out of here used to be a bare `exit 0`, and
+# the one that matters is taken on EVERY LIVE STICK: 2 x RAM plus 2 GB of slack
+# does not fit in the free space on an 8 GB device, so the medium booted a 2 GB
+# desktop with no swap and nothing anywhere said so. The session was then
+# OOM-killed back to the login screen 145 seconds in — measured 2026-09-08 —
+# and read as a driver fault for two days. A decline is a fact about the
+# machine, and stage 1 is on the console and in /var/log/ember-boot.txt.
+say() { echo "ember-swap: $*"; }
+
 # Already sorted, by us or by the installer or by hand.
-[ -e "$SWAP" ] && exit 0
-grep -qs '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab && exit 0
-[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -gt 0 ] && exit 0
+[ -e "$SWAP" ] && { say "$SWAP already exists"; exit 0; }
+grep -qs '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab &&
+    { say "fstab already names swap"; exit 0; }
+[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -gt 0 ] &&
+    { say "swap is already active"; exit 0; }
 
 ram_mb=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
-[ "$ram_mb" -gt 0 ] || exit 0
+[ "$ram_mb" -gt 0 ] || { say "could not read MemTotal"; exit 0; }
 
 # Twice RAM is the old rule and it is still about right at this size; 4 GB is
 # plenty and keeps the file from dominating a small disk.
@@ -38,22 +49,27 @@ want_mb=$((ram_mb * 2))
 # unusable failure for another, and this runs before anyone has installed
 # anything, so "free now" is as good as it ever gets.
 free_mb=$(df -Pm / | awk 'NR==2 {print $4}')
-[ "$((free_mb - want_mb))" -ge 2048 ] || exit 0
+[ "$((free_mb - want_mb))" -ge 2048 ] || {
+    say "want ${want_mb} MB + 2048 MB slack, only ${free_mb} MB free on / — no swapfile"
+    say "07-ember-zram.sh runs next and will put compressed swap in RAM instead"
+    exit 0
+}
 
 # ⚠ fallocate then dd: fallocate is instant but leaves unwritten extents on
 # some filesystems, and swapon refuses a file with holes. dd is slow on an SD
 # card, so it is the fallback rather than the default.
 if ! fallocate -l "${want_mb}M" "$SWAP" 2>/dev/null; then
     dd if=/dev/zero of="$SWAP" bs=1M count="$want_mb" status=none 2>/dev/null || {
-        rm -f "$SWAP"; exit 0; }
+        say "could not write a ${want_mb} MB file"; rm -f "$SWAP"; exit 0; }
 fi
 
 # ⛔ 0600 OR swapon REFUSES IT, with "insecure permissions".
 chmod 600 "$SWAP"
 chown 0:0 "$SWAP"
 
-mkswap "$SWAP" >/dev/null 2>&1 || { rm -f "$SWAP"; exit 0; }
-swapon "$SWAP" 2>/dev/null || { rm -f "$SWAP"; exit 0; }
+mkswap "$SWAP" >/dev/null 2>&1 || { say "mkswap failed"; rm -f "$SWAP"; exit 0; }
+swapon "$SWAP" 2>/dev/null || { say "swapon failed"; rm -f "$SWAP"; exit 0; }
 
 grep -qs '^/swapfile' /etc/fstab || printf '/swapfile\tnone\tswap\tdefaults\t0 0\n' >> /etc/fstab
+say "${want_mb} MB swapfile at $SWAP"
 exit 0

@@ -230,6 +230,12 @@ fi
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm755 /installer/ember-swap /mnt/usr/bin/ember-swap
 install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember-swap.sh
+# ⚠ The Pi has the same shortfall and less RAM than the P4 to have it in — 1830
+# MB, and ember-swap's own header records that it could not link FEX until a
+# swapfile existed. Same rule as x86: this runs only where the swapfile could
+# not be made. See installer/ember-zram.
+install -Dm755 /installer/ember-zram /mnt/usr/bin/ember-zram
+install -Dm644 /installer/07-ember-zram.sh /mnt/etc/runit/core-services/07-ember-zram.sh
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
 # ⚠ card0 is v3d, which is RENDER-ONLY and has no connectors; the display is

@@ -1,0 +1,156 @@
+#!/bin/sh
+#
+# ember-zram — compressed swap in RAM, for the media that cannot have a swapfile.
+#
+# ⛔ WHY THIS EXISTS: THE LIVE STICK HAS NO SWAP AT ALL, AND THE DESKTOP DOES NOT
+# FIT IN 2 GB WITHOUT ONE. ember-swap declines on the boot medium — correctly,
+# there is no room — and says nothing, so the image ships a desktop that cannot
+# survive its own installer. Measured on the reference machine 2026-09-08:
+#
+#   live stick   7421 MB total, 5245 used, 1794 FREE. ember-swap wants
+#                2 x RAM = 3996 MB plus 2048 MB of slack left over = 6044 MB.
+#                1794 < 6044, so it exits 0 and the medium boots with no swap.
+#   installed    same machine, same XFCE, swapfile present: 1114 MB of RAM in
+#                use and 1141 MB ALREADY IN SWAP, sitting idle. That is
+#                2255 MB of anonymous pages on a 1998 MB machine.
+#
+# So the desktop's own working set overcommits RAM by roughly a gigabyte before
+# anyone asks it to do anything. With a swapfile that is invisible. Without one
+# the kernel has nowhere to put the difference, and on 2026-09-08 the live
+# session died 145 seconds in with ember-install running:
+#
+#     lightdm  Session pid=801: Exited with return value 1
+#              Seat seat0: Stopping display server, no sessions require it
+#
+# ⚠ NOTE WHAT THAT IS NOT. Xorg did not crash — lightdm stopped it afterwards
+# because nothing needed it any more. The session leader was killed, so the
+# symptom is a desktop that vanishes back to the login screen with no error
+# anywhere, which reads as a compositor or driver fault and is neither. This is
+# also what ember-xorg-oom-reset was always going to convert the old
+# whole-machine death into: one session instead of every service. It did its
+# job; this is the other half.
+#
+# ⚠ zram AND NOT A SMALLER SWAPFILE. There is 1794 MB free on the stick, so a
+# 1 GB file would physically fit — but swapping to a USB stick over a P4's
+# controller is slow enough that thrashing reads as a hang, and it writes a
+# gigabyte to the medium on every first boot. zram costs no disk at all and
+# lzo-rle gets roughly 2.5:1 on desktop anonymous pages, so ~2 GB of swap for
+# ~800 MB of RAM. That is the gigabyte the measurement above says is missing.
+#
+# ⛔ FALLBACK ONLY, BY DESIGN. If ember-swap got a real swapfile — which it does
+# on any installed system, where the disk has room — this does nothing at all.
+# Running zram alongside disk swap is a defensible setup and is deliberately NOT
+# what this does: the installed path works today and is not what broke.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+DEV=/dev/zram0
+SYS=/sys/block/zram0
+
+# ⚠ SAY WHY, ALWAYS. Every previous round of this bug was invisible: a guard
+# declined, returned success, and the image shipped without the thing. Stage 1
+# is on the console and in /var/log/ember-boot.txt, so a line here is the
+# difference between a diagnosis and another trip to the machine.
+say() { echo "ember-zram: $*"; }
+
+# ── already sorted? ──
+#
+# ⚠ ANY swap counts, not just ours. 04-swap.sh has already activated whatever
+# fstab names and 07-ember-swap.sh has already had its go at making a file; if
+# either produced swap, the machine has somewhere to put anonymous pages and
+# this is not needed.
+if [ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -gt 0 ]; then
+    say "swap is already active, nothing to do"
+    exit 0
+fi
+
+# ── the module ──
+#
+# ⚠ zram is a MODULE here and nothing else pulls it in, so it is not loaded at
+# this point in the boot. num_devices=1 because a second one would be a second
+# thing to get wrong; if it is already loaded, modprobe ignores the parameter
+# rather than failing, which is why the load is not conditional on the sysfs
+# directory being absent.
+if [ ! -d "$SYS" ]; then
+    modprobe zram num_devices=1 2>/dev/null || true
+fi
+if [ ! -d "$SYS" ]; then
+    say "no zram support in this kernel — the desktop will run without swap"
+    exit 0
+fi
+
+# Someone got here first (a re-run, or a second stage-1 pass).
+if [ "$(cat "$SYS/disksize" 2>/dev/null || echo 0)" != "0" ]; then
+    say "zram0 is already configured"
+    exit 0
+fi
+
+ram_mb=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+if [ "$ram_mb" -le 0 ]; then
+    say "could not read MemTotal"
+    exit 0
+fi
+
+# ⛔ NOT zstd ON THIS HARDWARE. The reference machine is a 3.0 GHz Pentium 4 with
+# no SSE4 and no hardware to hide the cost, and every page in and out of swap
+# pays it twice. lzo-rle is several times faster at a compression ratio that is
+# close enough to matter less than the latency does. The list is read from the
+# kernel rather than assumed, because a kernel built without one of these would
+# otherwise take a write error on a path where an error is fatal to the boot.
+#
+# The file reads like "[lzo] lzo-rle lz4 zstd" — brackets mark the ACTIVE one,
+# so they have to come off before the names can be compared.
+algo=""
+avail=$(tr -d '[]' < "$SYS/comp_algorithm" 2>/dev/null || echo "")
+for want in lzo-rle lz4 lzo; do
+    for have in $avail; do
+        [ "$want" = "$have" ] || continue
+        algo=$want
+        break
+    done
+    [ -n "$algo" ] && break
+done
+if [ -n "$algo" ]; then
+    echo "$algo" > "$SYS/comp_algorithm" 2>/dev/null || algo=""
+fi
+[ -n "$algo" ] || algo="(kernel default)"
+
+# ⚠ mem_limit IS THE POINT OF THE BELT AND BRACES. disksize is how much
+# UNCOMPRESSED data zram will accept; mem_limit is how much RAM it may spend
+# holding it. Without the limit, a workload whose pages do not compress — one
+# that has already been through zstd or a JPEG, say — stores close to 1:1 and
+# zram becomes a way to spend all of RAM on RAM. At half of memory the worst
+# case is a full zram that simply stops accepting pages, which is the ordinary
+# out-of-swap condition rather than a new failure.
+disk_mb=$ram_mb
+lim_mb=$((ram_mb / 2))
+
+echo "${disk_mb}M" > "$SYS/disksize" 2>/dev/null || {
+    say "could not set disksize"
+    echo 1 > "$SYS/reset" 2>/dev/null || true
+    exit 0
+}
+echo "${lim_mb}M" > "$SYS/mem_limit" 2>/dev/null || true
+
+if ! mkswap "$DEV" >/dev/null 2>&1; then
+    say "mkswap failed on $DEV"
+    echo 1 > "$SYS/reset" 2>/dev/null || true
+    exit 0
+fi
+
+# ⛔ PRIORITY 100, ABOVE ANY DISK SWAP. It only matters if a swapfile appears
+# later — on a machine installed from this medium, say — but when it does, RAM
+# has to be preferred over the stick or the ordering is exactly backwards.
+#
+# ⚠ NOT ADDED TO fstab. A zram device does not survive a reboot, so an fstab
+# entry naming /dev/zram0 is a boot-time failure waiting for the first boot
+# where this script declines. This runs every boot; that is the mechanism.
+if ! swapon -p 100 "$DEV" 2>/dev/null; then
+    say "swapon failed on $DEV"
+    echo 1 > "$SYS/reset" 2>/dev/null || true
+    exit 0
+fi
+
+say "${disk_mb} MB of compressed swap on $DEV (${algo}, at most ${lim_mb} MB of RAM)"
+exit 0

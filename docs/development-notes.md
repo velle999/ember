@@ -409,6 +409,75 @@ nothing, on an image sized to fit a nominal 8 GB device. It is created at
 `07-ember-swap.sh`, after `06-ember-expand.sh` has grown the root to fill the
 disk — before that, "free space" is the image's own few hundred MB of slack.
 
+### ✅ RESOLVED: the live desktop died because that rule excludes the live stick (2026-09-08)
+
+⛔ **The medium the installer runs on is the one medium that never gets a
+swapfile, and nothing said so.** Read the sizing rule again against an 8 GB
+stick, measured on the reference machine:
+
+| | |
+|---|---|
+| stick | 7421 MB total, 5245 used, **1794 MB free** |
+| `ember-swap` wants | 2 × 1998 MB RAM = 3996 MB, **plus 2048 MB left over** |
+| so | 1794 < 6044 — declines, `exit 0`, **silently** |
+
+The same guard that stops a swapfile filling a small disk stops it existing at
+all on the boot medium. Every live stick therefore booted the XFCE desktop with
+**no swap of any kind** — no swapfile, no zram, nothing in `fstab`.
+
+And that desktop does not fit in 2 GB. On the machine installed *from* that
+stick, idle, with a swapfile present:
+
+    Mem:   1998 total   1114 used
+    Swap:  3995 total   1141 used     ← 1141 MB already paged out, doing nothing
+
+**2255 MB of anonymous pages on a 1998 MB machine.** The desktop overcommits RAM
+by about a gigabyte before anyone asks it to do anything; the swapfile is what
+makes that invisible. Without one the kernel has nowhere to put the difference.
+
+**What it looked like.** The session died 145 seconds in, with `ember-install`
+running in a terminal:
+
+    lightdm  Session pid=801: Exited with return value 1
+             Seat seat0: Stopping display server, no sessions require it
+             Seat seat0: Active display server stopped, starting greeter
+
+⚠ **Note what that is not.** Xorg did not crash — lightdm stopped it *after*,
+because nothing needed it any more, and `Xorg.0.log.old` from that boot has no
+`(EE)` in it at all. The session leader was killed. So the symptom is a desktop
+that vanishes back to the login screen leaving nothing behind, which reads as a
+compositor or driver fault and is neither. Two days went into the driver.
+
+⚠ It is also exactly what `ember-xorg-oom-reset` was always going to convert the
+old whole-machine death into — *"the cost is one session instead of the whole
+machine"*, in its own comment. That fix worked. This is the other half of it.
+
+**The fix: `ember-zram`, at `07-ember-zram.sh`.** Compressed swap in RAM,
+`lzo-rle`, disksize 1× RAM, `mem_limit` half of RAM. The name sorts after
+`07-ember-swap.sh` in stage 1's glob, which is the whole ordering mechanism: the
+swapfile gets its go first and zram stands down whenever it succeeded, so an
+installed system is untouched. Verified on the P4 2026-09-08:
+
+    ember-zram: 1998 MB of compressed swap on /dev/zram0 (lzo-rle, at most 999 MB of RAM)
+    /dev/zram0 partition  2G  0B  100        ← priority 100, above the swapfile's -2
+    MEM-LIMIT 999M
+
+⚠ **zram and not a smaller swapfile.** 1794 MB is free, so a 1 GB file would
+physically fit — but swapping to a USB stick through a P4's controller is slow
+enough that thrashing reads as a hang, and it writes a gigabyte to the medium on
+every first boot. zram costs no disk and lzo-rle gets roughly 2.5:1 on desktop
+anonymous pages: ~2 GB of swap for ~800 MB of RAM.
+
+⛔ **Not zstd on this hardware.** No SSE4, nothing to hide the cost, and every
+page pays it twice. The algorithm is read from `comp_algorithm` rather than
+assumed — a kernel built without one would otherwise take a write error on a
+path where an error is fatal to the boot.
+
+⛔ **And `ember-swap` now says why it declined.** Every exit from it was a bare
+`exit 0`. The decline that matters is taken on every live stick, and a guard
+that returns success is how this stayed invisible — the same shape as the
+patched-Mesa package that was silently absent from three builds.
+
 
 ## The elogind respawn loop
 
