@@ -46,6 +46,9 @@ Raspberry Pi 4:
   its game library is readable and its links cannot break
 - **RetroArch** with 31 cores baked in, plus menu assets and controller
   profiles — all offline
+- **DOS games** under DOSBox-X, which is built here because the emulator Void
+  ships cannot execute on this CPU at all: `dosbox-staging` contains SSSE3
+  instructions and a Pentium 4 stops at SSE3, so it takes SIGILL on every launch
 - **Raspberry Pi**: boots to XFCE with ethernet and wifi, and drives a 4"
   480x800 panel that publishes no EDID at all
 
@@ -65,12 +68,37 @@ build/validate-profiles.sh        # every package name still exists, per arch
 build/fetch-cores.sh i686         # libretro cores
 build/fetch-assets.sh             # RetroArch menu assets + controller profiles
 build/mkrootfs.sh i686 desktop    # 4.7 GB rootfs   (EMBER_WINE=0 saves ~790 MB)
-build/mkimage.sh  i686 desktop    # 6.2 GB bootable image
-sudo build/write-usb.sh           # write it to a stick, safely
+build/mkimage.sh  i686 desktop    # 6.2 GB bootable image  (USB)
+build/mkiso.sh    i686 desktop    # 2.1 GB bootable ISO    (DVD, or USB)
+sudo build/write-usb.sh           # write the image to a stick, safely
 ```
 
 `write-usb.sh` addresses the stick by its `/dev/disk/by-id` path and refuses
 anything that is not a real, removable, unmounted block device.
+
+### Two media, and they are not the same thing
+
+⛔ **Not every Pentium 4 board can boot from USB.** Plenty of 865/875-era BIOSes
+either lack the option or implement it badly — which is exactly the hardware
+this project targets. That is what the ISO is for, and the reference machine has
+two DVD drives.
+
+| | `.img` | `.iso` |
+|---|---|---|
+| size | 6.2 GB | **2.1 GB** — squashfs, fits a single-layer DVD |
+| media | USB only | **DVD**, or USB (it is isohybrid, `dd` works) |
+| root | writable ext4 | read-only squashfs + a RAM overlay |
+| keeps changes | yes | **no** — it forgets everything on reboot |
+| swap | `ember-swap` makes a swapfile | zram only |
+
+The ISO is an installer you can test-drive; the `.img` is a system. Where USB
+boot works, prefer the `.img`.
+
+⚠ **The ISO's overlay lives in RAM**, 512 MB by default (`EMBER_OVERLAY_MB`).
+That comes straight out of what the desktop has to live in on a 2 GB machine,
+and it only became viable at all once the nv30 pixmap leak was fixed — before
+that an idle desktop needed 1114 MB plus 1141 MB of swap, and there was no room
+for an overlay. Do not raise it without re-measuring.
 
 ### For the Raspberry Pi
 
@@ -378,6 +406,14 @@ info` in 0.06 s.
 - **`linux6.18-headers` is missing `arch/x86/entry/syscalls/`**, so the kernel's
   `archheaders` step fails for *any* out-of-tree module built against it. Found
   while testing the above; unrelated to nvidia and unfixed.
+- **The ISO has been boot-tested in qemu, not on real optical media.** It gets
+  to runit stage 2 with a clean `/proc` and no errors, and its El Torito record,
+  isohybrid MBR and volume label all check out — but a 2003 BIOS reading a
+  burned disc is not a VM, and that is the case it exists for.
+- **SDL2 cannot match a GLX visual on this machine** — `Couldn't find matching
+  GLX visual`, on nouveau, llvmpipe *and* NVIDIA 304, with the server offering
+  192 of them. `SDL_VIDEO_X11_VISUALID=0x021` works around it. DOSBox-X does not
+  hit it, so it is recorded rather than fixed.
 - **One machine, one card.** The nv4x result is verified on a GeForce 7600 GS
   under deliberate load, not across the card list it should apply to.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
