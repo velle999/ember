@@ -1,116 +1,94 @@
 #!/bin/sh
 #
-# ember-gpu — switch between nouveau (default) and the optional NVIDIA 304 stack.
+# ember-gpu — choose the graphics stack, and say what is running now.
 #
-# ⛔ nouveau IS WHAT EMBER BOOTS AND THIS CHANGES NOTHING UNTIL IT IS RUN. The
-# 304 stack ships alongside, never in front of it.
+# ── What this does and does not do ─────────────────────────────────────────
 #
-# ⛔ AND SWITCHING TO nvidia ARMS A KERNEL BUG. nvidia.ko is an unsigned
-# out-of-tree module, and on this hardware that is exactly the condition where
-# reading /proc/modules NULL-derefs in m_show. Once it is loaded:
+# ⛔ IT WRITES A PREFERENCE AND REBOOTS. It does not switch a running system.
+# An earlier version did: it stopped lightdm, swapped the kernel module and
+# started a second X server by hand. That worked, and produced a desktop with no
+# seat, which made polkit demand a password for reboot, shutdown and suspend --
+# see installer/ember-xserver for the measurement. Letting lightdm start the
+# right server on the next boot is what makes the session a real one.
 #
-#     * `lsmod` kills the machine
-#     * anything that invokes dracut kills the machine
-#
-# It is why the nouveau fixes are built into the kernel package rather than
-# shipped as a loose .ko. A reboot clears it — nothing here is persistent.
-#
-# ⚠ AND IT MAY NOT BE FASTER. That is the honest state of it: nouveau cannot
-# reclock this card, so 304 ought to win, but every measurement taken so far was
-# vsync-capped or CPU-bound and none of them proved it. See docs/target-p4.md.
+# The choice is applied at boot by 08-ember-gpu.sh, through ember-gpu-detect
+# (which decides) and ember-gpu-apply (which loads the module).
 #
 # Usage:
-#   ember-gpu status
-#   ember-gpu nvidia     # stop the desktop, load 304, start X on vt8
-#   ember-gpu nouveau    # reboot back (the only clean way)
+#   ember-gpu                 show what is running and what is configured
+#   ember-gpu auto            detect from the hardware (the default)
+#   ember-gpu nvidia          force the proprietary 304 stack
+#   ember-gpu nouveau         force the open driver
+#   ember-gpu radeon|intel    force those (they are the autodetected default)
+#
+# ⚠ ON AN NVIDIA CARD, auto MEANS PROPRIETARY. 304 is chosen whenever the card
+# is in its supported list, because on this hardware it is the better driver:
+# measurably faster, and without the intermittent drawing artefacts nouveau
+# shows on nv4x. nouveau is the fallback, not the default.
+#
+# ⛔ AND 304 ARMS A KERNEL BUG. nvidia.ko is unsigned and out-of-tree, and on
+# this hardware that is the condition where reading /proc/modules NULL-derefs in
+# m_show. While it is loaded:
+#
+#     * `lsmod` kills the machine
+#     * anything that invokes dracut kills the machine -- INCLUDING A KERNEL
+#       UPGRADE, which now happens on a machine that boots this way by default
+#
+# ⚠ TWO WAYS OUT, NEITHER NEEDING A DESKTOP. At the GRUB menu press `e` and
+# append ember.gpu=nouveau to the linux line — that works when nothing but the
+# bootloader does. Or log in on a text console (tty1-6 are always running) and
+# run `ember-gpu nouveau`. Do one of them BEFORE upgrading a kernel.
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 set -eu
 
+CONF=/etc/ember/gpu
+STATE=/run/ember-gpu
 P=/opt/x11-19
-KO=$P/nvidia.ko
 
-usage() { sed -n '3,30p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '3,45p' "$0"; exit "${1:-0}"; }
 
-# ⚠ /sys/module, NEVER lsmod. See the header: once nvidia.ko is loaded, reading
+# ⚠ /sys/module, NEVER lsmod. See above: once nvidia.ko is loaded, reading
 # /proc/modules takes the machine down, and lsmod is exactly that read.
 loaded() { [ -d "/sys/module/$1" ]; }
 
 status() {
-    echo "kernel module:  $(loaded nvidia && echo "nvidia $(cat /sys/module/nvidia/version 2>/dev/null)" || (loaded nouveau && echo nouveau || echo none))"
-    echo "304 stack:      $([ -d $P ] && echo "installed at $P" || echo "not installed")"
-    echo "304 module:     $([ -f $KO ] && echo present || echo missing)"
+    running=$(cat "$STATE" 2>/dev/null || echo "unknown")
+    configured=$(cat "$CONF" 2>/dev/null || echo auto)
+    echo "running now:    $running"
+    echo "configured:     $configured"
+    echo "would detect:   $(/usr/bin/ember-gpu-detect 2>/dev/null || echo '?')"
+    echo "kernel module:  $(loaded nvidia && echo "nvidia $(cat /sys/module/nvidia/version 2>/dev/null)" \
+                            || (loaded nouveau && echo nouveau \
+                            || (loaded radeon && echo radeon \
+                            || (loaded amdgpu && echo amdgpu \
+                            || (loaded i915 && echo i915 || echo none)))))"
+    echo "304 stack:      $([ -f $P/nvidia.ko ] && echo "installed at $P" || echo "not in this image")"
     if loaded nvidia; then
+        echo
         echo "⛔ /proc/modules is ARMED — do not run lsmod, do not run dracut."
-        echo "   Reboot to clear it."
+        echo "   Before a kernel upgrade: ember-gpu nouveau, then reboot."
+    fi
+}
+
+set_mode() {
+    [ "$(id -u)" = 0 ] || { echo "ember-gpu: run me as root" >&2; exit 1; }
+    mkdir -p "$(dirname "$CONF")"
+    printf '%s\n' "$1" > "$CONF"
+    echo "configured: $1"
+    now=$(/usr/bin/ember-gpu-detect 2>/dev/null || echo '?')
+    echo "next boot will use: $now"
+    if [ "$now" != "$(cat "$STATE" 2>/dev/null || echo)" ]; then
+        echo
+        echo "That differs from what is running. Reboot to apply it —"
+        echo "the X server, the kernel module and the console state all have to"
+        echo "change together, and only a boot does that cleanly."
     fi
 }
 
 case "${1:-status}" in
-    status) status ;;
-    nouveau)
-        loaded nvidia || { echo "already on nouveau"; exit 0; }
-        echo "The only clean way back is a reboot — the X server, the module and"
-        echo "the console state all have to go together."
-        printf "reboot now? [y/N] "; read -r a
-        case "$a" in y|Y) exec reboot ;; *) echo "nothing done"; exit 0 ;; esac ;;
-    nvidia)
-        [ "$(id -u)" = 0 ] || { echo "ember-gpu: run me as root" >&2; exit 1; }
-        [ -f "$KO" ] || { echo "ember-gpu: $KO is missing — this image was built without the 304 stack" >&2; exit 1; }
-        cat <<'WARN'
-⛔ This loads an unsigned out-of-tree kernel module. On this hardware that makes
-   reading /proc/modules fatal: `lsmod` and anything invoking dracut will take
-   the machine down until you reboot.
-
-   It also stops your desktop. X restarts on vt8 under xorg-server 1.19.
-WARN
-        printf "continue? [y/N] "; read -r a
-        case "$a" in y|Y) : ;; *) echo "nothing done"; exit 0 ;; esac
-
-        echo "stopping the desktop"; sv down lightdm 2>/dev/null || true; sleep 4
-        echo "unloading nouveau";    rmmod nouveau || { echo "could not unload nouveau — is X really stopped?" >&2; exit 1; }
-        echo "loading nvidia";       insmod "$KO"
-        echo "  loaded $(cat /sys/module/nvidia/version 2>/dev/null)"
-        echo "starting X on vt8"
-        env LD_LIBRARY_PATH=$P/lib/nvidia $P/bin/Xorg :2 vt8 \
-            -config $P/etc/xorg.conf -logfile /var/log/Xorg.304.log -noreset &
-        sleep 12
-        # ⚠ The bracket keeps this pattern from matching ember-gpu's own command
-        # line — pkill/pgrep -f will happily match the shell that runs them.
-        if ! pgrep -f "[x]11-19/bin/Xorg" >/dev/null; then
-            echo "X did not start — see /var/log/Xorg.304.log" >&2
-            exit 1
-        fi
-
-        # ⛔ AND A SESSION ON IT, OR THERE IS NOTHING TO SEE. A bare X server
-        # draws a root window and a cursor, which is exactly what "it worked"
-        # looks like and is indistinguishable from "it is broken". The first
-        # version of this shipped without it and the report back was, fairly,
-        # "I'm just getting a cursor".
-        #
-        # ⚠ LD_LIBRARY_PATH is set for the whole session so every GL client
-        # under it — glxgears, RetroArch, anything — links the 304 libGL rather
-        # than Mesa's. Without it the desktop comes up and 3D silently does not.
-        U=${SUDO_USER:-ember}
-        id "$U" >/dev/null 2>&1 || U=ember
-        echo "starting a desktop for $U on :2"
-        su - "$U" -c "env DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia \
-             dbus-run-session xfce4-session" >/tmp/ember-gpu-session.log 2>&1 &
-        sleep 8
-        if pgrep -u "$U" -x xfce4-session >/dev/null 2>&1; then
-            echo "desktop is up on vt8 — chvt 8 to look at it"
-        else
-            echo "the X server is up but the session did not start;"
-            echo "see /tmp/ember-gpu-session.log. The server alone shows only a cursor."
-        fi
-        cat <<EOF
-
-  switch to it:   chvt 8          (chvt 1 comes back to the console)
-  measure it:     DISPLAY=:2 LD_LIBRARY_PATH=$P/lib/nvidia __GL_SYNC_TO_VBLANK=0 glxgears
-  ⚠ compare like for like — the nouveau baseline was unthrottled, on an awake
-    console. A blanked screen alone drops glxgears to ~3 FPS on either driver.
-EOF
-        ;;
-    -h|--help) usage 0 ;;
-    *) usage 2 ;;
+    status|"")                 status ;;
+    auto|nvidia|nvidia304|nouveau|radeon|intel|modesetting) set_mode "$1" ;;
+    -h|--help)                 usage 0 ;;
+    *) echo "ember-gpu: unknown mode '$1'" >&2; usage 2 ;;
 esac

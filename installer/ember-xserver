@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# ember-xserver — lightdm's xserver-command. Starts whichever X server matches
+# the driver the kernel actually loaded.
+#
+# ── Why lightdm has to be the one to start it ──────────────────────────────
+#
+# ⛔ THE SESSION MUST COME FROM THE DISPLAY MANAGER, NOT FROM A SCRIPT. An
+# earlier ember-gpu started the 304 server by hand on vt8 and then ran
+# `su - ember -c "dbus-run-session xfce4-session"` on it. That desktop worked,
+# and every single privileged action in it demanded a password: reboot, shut
+# down, suspend, all of them.
+#
+# The reason is that `su` does not open an elogind login session, and nothing
+# set XDG_SEAT/XDG_VTNR, so that desktop had NO SEAT. polkit grants
+# org.freedesktop.login1.* on `allow_active`, and "active" means a session
+# elogind has put on a seat. Measured, same user, same actions:
+#
+#     seat0 session (lightdm)   pkcheck reboot -> rc=0, authorised
+#     seatless session (su)     pkcheck reboot -> auth_admin_keep, password
+#
+# Going through lightdm means PAM runs, elogind registers the session on seat0,
+# and the prompts disappear -- for both drivers, with no polkit rule needed.
+#
+# ⚠ "$@" MUST BE PASSED THROUGH UNTOUCHED. lightdm appends the display, the
+# auth file, the vt and `-seat seat0`; those arguments ARE the seat.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+P=/opt/x11-19
+MODE=$(cat /run/ember-gpu 2>/dev/null || echo nouveau)
+
+if [ "$MODE" = nvidia304 ] && [ -x "$P/bin/Xorg" ]; then
+    # ⛔ THE 304 DRIVER NEEDS ITS OWN X SERVER. It is built against xorg-server
+    # 1.19's ABI (videodrv 23.0, XInput 24.1); the system X server is far newer
+    # and will not load nvidia_drv.so at all. That server lives under its own
+    # prefix, so it reads /opt/x11-19/etc and never sees /etc/X11/xorg.conf.d --
+    # which is what keeps the nouveau modesetting snippet away from it.
+    exec env LD_LIBRARY_PATH="$P/lib/nvidia${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$P/bin/Xorg" -config "$P/etc/xorg.conf" "$@"
+fi
+
+# nouveau, radeon, intel, anything else: the system server autoconfigures.
+for x in /usr/libexec/Xorg /usr/bin/Xorg /usr/lib/xorg-server/Xorg; do
+    [ -x "$x" ] && exec "$x" "$@"
+done
+echo "ember-xserver: no X server found" >&2
+exit 1

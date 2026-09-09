@@ -1,0 +1,105 @@
+#!/bin/sh
+#
+# ember-gpu-detect — decide which graphics stack this machine should run, and
+# say so on stdout. One word: nvidia304 | nouveau | radeon | intel | modesetting
+#
+# ⚠ THIS DECIDES, IT DOES NOT ACT. 08-ember-gpu.sh loads the module and
+# ember-xserver picks the X server; both ask this. Keeping the decision in one
+# place is the point — an X server started against a driver the kernel did not
+# load is a black screen with no message.
+#
+# ── Precedence, most specific first ────────────────────────────────────────
+#
+#   1. ember.gpu=<mode> on the kernel command line
+#   2. /etc/ember/gpu               (written by `ember-gpu <mode>`)
+#   3. autodetection from PCI
+#
+# ⛔ THE KERNEL COMMAND LINE IS THE ESCAPE HATCH AND MUST STAY FIRST. If 304
+# stops working — a kernel upgrade it cannot build against, a card swap — the
+# machine comes up with no desktop, and a setting you can only change from a
+# desktop is no use. At the GRUB menu press `e`, append ember.gpu=nouveau to
+# the linux line and boot: that needs nothing working but the bootloader.
+#
+# ⚠ The second way in is the text consoles, which are enabled on tty1-6 and do
+# not depend on X: log in there and run `ember-gpu nouveau`.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+# ⚠ Both overridable so the detector can be exercised against a tree that is
+# not the running system -- it is the one piece here that must be testable
+# without installing anything.
+IDS=${EMBER_GPU_IDS:-/usr/share/ember/nvidia304-supported.ids}
+KO=${EMBER_GPU_KO:-/opt/x11-19/nvidia.ko}
+PCI=${EMBER_GPU_PCI:-/sys/bus/pci/devices}
+CMDLINE=${EMBER_GPU_CMDLINE:-/proc/cmdline}
+CONF=${EMBER_GPU_CONF:-/etc/ember/gpu}
+
+valid() {
+    case "$1" in
+        nvidia304|nouveau|radeon|intel|modesetting) return 0 ;;
+        nvidia)  return 0 ;;   # a friendly alias for nvidia304
+        *) return 1 ;;
+    esac
+}
+canon() { [ "$1" = nvidia ] && echo nvidia304 || echo "$1"; }
+
+# ── 1. kernel command line ──────────────────────────────────────────────────
+for w in $(cat "$CMDLINE" 2>/dev/null || true); do
+    case "$w" in
+        ember.gpu=*)
+            v=${w#ember.gpu=}
+            if valid "$v"; then canon "$v"; exit 0; fi ;;
+    esac
+done
+
+# ── 2. explicit override ────────────────────────────────────────────────────
+if [ -r "$CONF" ]; then
+    v=$(tr -d ' \t\n' < "$CONF" 2>/dev/null || true)
+    if [ -n "$v" ] && [ "$v" != auto ] && valid "$v"; then canon "$v"; exit 0; fi
+fi
+
+# ── 3. autodetect ───────────────────────────────────────────────────────────
+#
+# ⚠ boot_vga picks the card the firmware actually initialised, which is the one
+# with a console on it. A machine with an AGP card and a dead onboard chip lists
+# both; only one of them is the display.
+dev=""
+for d in "$PCI"/*; do
+    [ -r "$d/boot_vga" ] || continue
+    [ "$(cat "$d/boot_vga" 2>/dev/null)" = 1 ] && { dev=$d; break; }
+done
+if [ -z "$dev" ]; then
+    for d in "$PCI"/*; do
+        case "$(cat "$d/class" 2>/dev/null || echo)" in
+            0x0300*) dev=$d; break ;;
+        esac
+    done
+fi
+[ -n "$dev" ] || { echo modesetting; exit 0; }
+
+vendor=$(cat "$dev/vendor" 2>/dev/null || echo)
+device=$(cat "$dev/device" 2>/dev/null || echo)
+device=$(printf '%s' "$device" | sed 's/^0x//' | tr 'A-Z' 'a-z')
+
+case "$vendor" in
+0x10de)
+    # ⛔ 304 DOES NOT DRIVE EVERY NVIDIA CARD, and the ones it refuses are
+    # exactly the ones this project is otherwise aimed at. A GeForce FX 5200 is
+    # in the driver's own documentation — under the 173.14.xx branch, which is a
+    # different driver we do not ship. Choosing 304 for it gives an X server
+    # that exits on startup, so the ID list is checked, not assumed.
+    if [ -f "$KO" ] && [ -r "$IDS" ] && grep -qx "$device" "$IDS" 2>/dev/null; then
+        echo nvidia304
+    else
+        echo nouveau
+    fi ;;
+0x1002|0x1022)
+    # ⚠ radeon/amdgpu, whichever the kernel bound. The X server autoconfigures
+    # correctly from the KMS driver; nothing in this tree overrides it.
+    echo radeon ;;
+0x8086)
+    echo intel ;;
+*)
+    echo modesetting ;;
+esac

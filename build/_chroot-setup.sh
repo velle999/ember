@@ -402,6 +402,30 @@ if [ "$TIER" = desktop ]; then
         exit 1
     fi
 
+    # ⛔ LIGHTDM STARTS THE X SERVER THROUGH ember-xserver, WHICH PICKS ONE.
+    # There are two: the system server for nouveau/radeon/intel, and the
+    # xorg-server 1.19 under /opt/x11-19 that the NVIDIA 304 driver's ABI
+    # requires. ember-gpu-apply decides at boot and leaves the answer in
+    # /run/ember-gpu; the wrapper reads it.
+    #
+    # ⛔ AND THIS IS WHAT GIVES THE 304 DESKTOP A SEAT. The previous way in was
+    # ember-gpu starting that server by hand and running the session under `su`,
+    # which opens no elogind session -- so the desktop had no seat, and polkit
+    # demanded a password for reboot, shutdown and suspend. Measured, same user:
+    # a lightdm seat0 session gets pkcheck rc=0 for org.freedesktop.login1.*,
+    # a seatless one gets auth_admin_keep. Going through lightdm fixes it for
+    # both drivers with no polkit rule at all.
+    if [ -x /usr/libexec/ember-xserver ]; then
+        grep -q '^xserver-command=' /etc/lightdm/lightdm.conf \
+            || sed -i 's|^\[Seat:\*\]|&\nxserver-command=/usr/libexec/ember-xserver|' \
+                   /etc/lightdm/lightdm.conf
+        grep -q '^xserver-command=/usr/libexec/ember-xserver' /etc/lightdm/lightdm.conf || {
+            echo "chroot: lightdm xserver-command not set" >&2; exit 1; }
+    else
+        echo "chroot: ember-xserver missing - no GPU selection at login" >&2
+        exit 1
+    fi
+
     # ── audio ───────────────────────────────────────────────────────────────
     # ⛔ INSTALLING pipewire WIRES UP NOTHING ON VOID. The package ships the
     # daemons, the autostart .desktop files and the config fragments, and then

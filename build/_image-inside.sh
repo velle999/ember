@@ -84,23 +84,41 @@ install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember
 install -Dm755 /installer/ember-zram /mnt/usr/bin/ember-zram
 install -Dm644 /installer/07-ember-zram.sh /mnt/etc/runit/core-services/07-ember-zram.sh
 
-# ── the optional NVIDIA 304 stack ───────────────────────────────────────────
+# ── graphics stack selection ────────────────────────────────────────────────
 #
-# ⚠ OPTIONAL, LIKE THE WIFI KEYFILE. Built by build/mk-nvidia304.sh; if the
-# directory is not there the image ships without it and nothing complains,
-# because nouveau is what Ember boots either way.
+# ⚠ THE CARD DECIDES, AT BOOT. ember-gpu-detect reads the boot VGA device:
+# NVIDIA in 304's supported list -> the proprietary stack; anything else ->
+# the in-kernel driver (nouveau for unsupported NVIDIA, radeon, i915, ...).
+# ember-gpu-apply loads the module, ember-xserver picks the matching X server,
+# and `ember-gpu <mode>` overrides the lot.
 #
-# ⛔ IT IS NOT WIRED INTO ANYTHING. No autostart, no modprobe config, no X
-# config — the files sit on disk until somebody runs `ember-gpu nvidia`, which
-# warns first. Loading that unsigned module makes /proc/modules fatal to read
-# on this hardware, so it must never happen by default.
-install -Dm755 /installer/ember-gpu /mnt/usr/bin/ember-gpu
+# ⛔ ON NVIDIA THE DEFAULT IS NOW PROPRIETARY, WHICH ARMS A KERNEL BUG. With
+# nvidia.ko loaded, reading /proc/modules NULL-derefs on this hardware: `lsmod`
+# and anything invoking dracut take the machine down, and that now includes a
+# KERNEL UPGRADE on a machine that boots this way by default. The way out needs
+# no desktop — `e` at the GRUB menu, append ember.gpu=nouveau — and is spelled
+# out in installer/ember-gpu. This is a deliberate trade for a card where
+# nouveau is measurably slower and shows drawing artefacts.
+#
+# ⚠ THE 304 STACK ITSELF IS STILL OPTIONAL, like the wifi keyfile. Built by
+# build/mk-nvidia304.sh; without it the detector finds no nvidia.ko and answers
+# nouveau, so an image built without it is simply an open-driver image.
+install -Dm755 /installer/ember-gpu        /mnt/usr/bin/ember-gpu
+install -Dm755 /installer/ember-gpu-detect /mnt/usr/bin/ember-gpu-detect
+install -Dm755 /installer/ember-gpu-apply  /mnt/usr/bin/ember-gpu-apply
+install -Dm755 /installer/ember-xserver    /mnt/usr/libexec/ember-xserver
+install -Dm644 /installer/08-ember-gpu.sh  /mnt/etc/runit/core-services/08-ember-gpu.sh
+# ⚠ Sourced by /etc/lightdm/Xsession out of xinitrc.d, so GL CLIENTS get the
+# proprietary libGL too — the server having it is not enough.
+install -Dm644 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
+install -Dm644 /installer/nvidia304-supported.ids \
+               /mnt/usr/share/ember/nvidia304-supported.ids
 if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ]; then
     tar xzf /nvidia304/x11-19.tar.gz -C /mnt
     install -Dm644 /nvidia304/nvidia.ko /mnt/opt/x11-19/nvidia.ko
-    echo "inside: NVIDIA 304 stack included (opt-in via ember-gpu)"
+    echo "inside: NVIDIA 304 stack included (default on a supported NVIDIA card)"
 else
-    echo "inside: no NVIDIA 304 stack — nouveau only (build/mk-nvidia304.sh builds it)"
+    echo "inside: no NVIDIA 304 stack — open drivers only (build/mk-nvidia304.sh builds it)"
 fi
 
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh

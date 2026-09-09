@@ -1,0 +1,81 @@
+#!/bin/sh
+#
+# ember-gpu-apply — put the kernel side of the graphics stack into the state
+# ember-gpu-detect asked for, then record what actually happened in
+# /run/ember-gpu for ember-xserver to read.
+#
+# ⛔ WHAT IS RECORDED IS WHAT SUCCEEDED, NOT WHAT WAS WANTED. If 304 is asked
+# for and the module will not load, this falls back to nouveau AND SAYS SO in
+# /run/ember-gpu, so the X wrapper starts the server that matches the driver the
+# kernel is actually running. Recording the intention instead would start the
+# 1.19 server against nouveau, which is a black screen.
+#
+# ⚠ Runs from 08-ember-gpu.sh in runit stage 1, before lightdm.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+
+STATE=/run/ember-gpu
+LOG=/run/ember-gpu.log
+P=/opt/x11-19
+KO=$P/nvidia.ko
+
+log() { echo "$*" >> "$LOG" 2>/dev/null || true; }
+loaded() { [ -d "/sys/module/$1" ]; }
+
+want=$(/usr/bin/ember-gpu-detect 2>/dev/null || echo nouveau)
+log "ember-gpu-apply: requested $want"
+
+if [ "$want" != nvidia304 ]; then
+    echo "$want" > "$STATE"
+    log "ember-gpu-apply: leaving the in-kernel driver alone ($want)"
+    exit 0
+fi
+
+# ── the proprietary path ────────────────────────────────────────────────────
+fallback() {
+    log "ember-gpu-apply: FALLING BACK to nouveau -- $1"
+    loaded nouveau || modprobe nouveau 2>/dev/null || true
+    echo nouveau > "$STATE"
+    exit 0
+}
+
+[ -f "$KO" ] || fallback "no $KO in this image"
+
+if loaded nvidia; then
+    log "ember-gpu-apply: nvidia already loaded"
+    echo nvidia304 > "$STATE"
+    exit 0
+fi
+
+# ⛔ nouveau HAS TO GO FIRST -- both drivers bind the same PCI device and the
+# second one to try simply fails. nouveau is loaded from the initramfs, so it is
+# already bound by the time this runs; that is fine and is why the console works
+# up to this point.
+if loaded nouveau; then
+    if ! rmmod nouveau 2>>"$LOG"; then
+        # ⚠ The usual reason is that fbcon is holding the framebuffer nouveau
+        # registered. Unbinding the console releases it. If that still does not
+        # work, nouveau stays and so does a working desktop.
+        for v in /sys/class/vtconsole/vtcon*; do
+            [ -w "$v/bind" ] || continue
+            case "$(cat "$v/name" 2>/dev/null || echo)" in
+                *frame\ buffer*) echo 0 > "$v/bind" 2>/dev/null || true ;;
+            esac
+        done
+        rmmod nouveau 2>>"$LOG" || fallback "nouveau will not unload"
+    fi
+fi
+
+insmod "$KO" 2>>"$LOG" || fallback "insmod $KO failed"
+loaded nvidia || fallback "nvidia.ko loaded but /sys/module/nvidia is absent"
+
+# ⚠ 304 predates the driver creating its own nodes reliably, and there is no
+# nvidia-modprobe in this image. Missing nodes present as an X server that
+# starts, finds no device and exits -- which reads exactly like an unsupported
+# card. Cheap to just ensure them.
+[ -e /dev/nvidiactl ] || mknod -m 666 /dev/nvidiactl c 195 255 2>/dev/null || true
+[ -e /dev/nvidia0 ]   || mknod -m 666 /dev/nvidia0   c 195 0   2>/dev/null || true
+
+echo nvidia304 > "$STATE"
+log "ember-gpu-apply: nvidia $(cat /sys/module/nvidia/version 2>/dev/null || echo '?') loaded"
