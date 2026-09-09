@@ -33,10 +33,70 @@ about the target, but it is the difference between two quite different chips.
 
 ## The graphics stack, which was the real worry
 
-**The proprietary route is closed.** NVIDIA's legacy 304.xx branch was the last
-to support GeForce 6/7 and it does not build against a 6.x kernel. Void packages
-no legacy NVIDIA driver for i686 at all — checked. So nouveau is not a
-preference here, it is the only option.
+⚠ **THE PROPRIETARY ROUTE IS NOT CLOSED, AND THIS SECTION USED TO SAY IT WAS.**
+The original wording — "it does not build against a 6.x kernel" — is wrong, and
+being stated as a closed door meant nobody re-examined it for four days of
+nouveau bug-hunting. What is actually true:
+
+- Void packages no legacy NVIDIA driver for i686 — **correct**. There is no
+  `nvidia304` srcpkg; `nvidia390` exists and starts at Fermi, so it does not
+  cover a GeForce 7.
+- Stock 304.137 does not build on 6.x — **correct**.
+- Nothing builds on 6.x — **WRONG**. `github.com/flydiscohuebr/nvidia-304`
+  carries patched 304.137 to Arch's 6.14 and 6.12-LTS, maintained as recently
+  as 2025-03.
+
+✅ **GATE 1 — THE KERNEL MODULE — PASSES.** Tested 2026-09-09 in a container
+against Ember's own patched headers: `nvidia.ko`, 14.5 MB, `elf_i386`, linked
+against `kernel-headers-6.18.49_99`. It took three things, all now known:
+
+- **29 of the fork's 31 patches apply unmodified**, including every kernel-6.15
+  C change to `nv.c` and `nv-linux.h`.
+- **Two hunks need porting**, both in `kernel/Makefile.kbuild`, both because
+  that PKGBUILD's `source_x86_64` is cut against the **64-bit** tarball — the
+  hunks carry `-mno-red-zone -mcmodel=kernel`, which do not exist in the 32-bit
+  file. The port is: `EXTRA_CFLAGS` → `ccflags-y`, add `-std=gnu17`,
+  `EXTRA_LDFLAGS` → `ldflags-y`, and the objtool bypass 6.15+ needs because the
+  blob fails objtool — `$(MODULE_NAME).o: override objtool-enabled =`.
+- ⛔ **Void's `linux6.18-headers` is missing `arch/x86/entry/syscalls/`** —
+  `Makefile`, `syscall_32.tbl`, `syscall_64.tbl`. Without them the kernel's own
+  `archheaders` target dies before nvidia compiles anything. Copied out of
+  `linux-6.18.tar.xz` to get past it. ⚠ **This is a fact about Ember's kernel
+  package, not about nvidia** — any out-of-tree module built this way against
+  these headers hits it.
+
+⚠ **Builds is not loads.** It has not been `modprobe`d on the P4, has not bound
+the card, and has not rendered a frame. No BTF was generated either (no
+`vmlinux` in the headers tree), so it is not byte-identical to a full dkms
+build.
+
+⛔ **GATE 2 — THE X SERVER — IS NOW THE WHOLE DECISION, AND IT IS UNCHANGED.**
+The fork ships an entire `xorg-server1.19-git-edit` tree because 304.137 needs a
+2017 X server; Ember runs **21.1.24**. Arch's instructions also pin
+`xf86-input-libinput` to **1.1.0** or the keyboard and mouse stop working, and
+the maintainer carries a stack of CVE backports for 1.19 precisely because it is
+long past end of life.
+
+⚠ The X ABI binds **video and input drivers**, not clients — XFCE, RetroArch and
+Wine do not care what version the server is. So the blast radius is the driver
+set, not the desktop. For a distribution targeting machines nobody builds for,
+carrying its own X server for the i686 tier is a legitimate choice rather than
+an absurd one. It is a project-direction call, and it is the only thing left in
+the way.
+
+⚠ **Why it is worth answering.** On this card the proprietary driver very
+likely wins, and not marginally: nouveau has no working reclocking for nv4x, so
+the GPU sits at boot clocks, while 304 clocks it properly. And nv30 in Mesa is
+lightly maintained code — this project has now patched an index-buffer
+relocation bug and a surface refcount leak in it, on top of kernel-side fence
+and pushbuf work. Security is not a counter-argument here: the reference
+machine does not need to be online.
+
+The cheap first step is a container build of 304.137 against 6.18 headers. It
+answers gate 1 with no risk to the machine, and costs nothing but build time.
+
+Until that is done, nouveau is what Ember ships — by measurement, not because
+the alternative was ruled out.
 
 **nouveau is three drivers wearing one name**, and which one a card lands on is
 the whole question:
