@@ -17,24 +17,40 @@
 # pass here means "X, lightdm and the session are correctly configured", NOT
 # "nouveau works on that card" — which only the machine can answer.
 #
-# Usage: build/desktop-test.sh [i686] [desktop] [seconds-to-wait]
+# ⛔ IT TESTS WHICHEVER MEDIUM YOU NAME, AND THE ISO IS A DIFFERENT MEDIUM.
+# The .img and the .iso are built by different scripts and boot by different
+# paths — grub off a partition versus isolinux off a squashfs with a RAM
+# overlay. An ISO once shipped that booted to an agetty with no accounts on it
+# while the .img beside it was perfect, and every structural check passed. So
+# the ISO gets booted here too, not reasoned about.
+#
+# Usage: build/desktop-test.sh [i686] [desktop] [seconds-to-wait] [img|iso]
 set -uo pipefail
 cd "$(dirname "$0")/.."
 . build/config.sh
 
-ARCH=${1:-i686}; TIER=${2:-desktop}; WAIT=${3:-300}
-IMG="out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER.img"
-[ -f "$IMG" ] || { echo "desktop-test: no image at $IMG" >&2; exit 1; }
+ARCH=${1:-i686}; TIER=${2:-desktop}; WAIT=${3:-300}; MEDIUM=${4:-img}
+case "$MEDIUM" in img|iso) : ;; *) echo "desktop-test: medium must be img or iso" >&2; exit 2 ;; esac
+OUTDIR="out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER"
+TARGET="$OUTDIR/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER.$MEDIUM"
+[ -f "$TARGET" ] || { echo "desktop-test: nothing at $TARGET" >&2; exit 1; }
 command -v qemu-system-i386 >/dev/null || { echo "SKIP: qemu-system-i386 not installed"; exit 77; }
 python3 -c 'import PIL' 2>/dev/null || { echo "SKIP: python3 PIL not installed"; exit 77; }
 
 T=$(mktemp -d); trap 'kill "${QP:-0}" 2>/dev/null; rm -rf "$T"' EXIT
 LOG="$T/serial.log"; MON="$T/mon.sock"; SHOT="$T/screen.ppm"
 
-echo "== booting $IMG for a screenshot (up to ${WAIT}s, TCG)"
+echo "== booting $TARGET for a screenshot (up to ${WAIT}s, TCG)"
+# ⚠ An ISO boots as a CD, not as a disk: -cdrom plus -boot d. Handing it to
+# -drive if=ide would offer the firmware a disk with no partition table.
+if [ "$MEDIUM" = iso ]; then
+    MEDIA_ARGS=(-cdrom "$TARGET" -boot d)
+else
+    MEDIA_ARGS=(-drive "file=$TARGET,format=raw,if=ide")
+fi
 qemu-system-i386 \
     -m 2048 -smp 2 \
-    -drive file="$IMG",format=raw,if=ide \
+    "${MEDIA_ARGS[@]}" \
     -vga std -display none \
     -serial file:"$LOG" \
     -monitor "unix:$MON,server,nowait" \
@@ -51,8 +67,19 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -qi "login:" "$LOG" 2>/dev/null; then booted=1; break; fi
     sleep 3
 done
-[ "$booted" = 1 ] && echo "  reached a login prompt; giving the display manager 60s more"
-sleep 60
+# ⚠ The greeter comes up long after the getty, and off a squashfs under TCG it
+# is far slower than from the .img this was first tuned against. Configurable,
+# because "the screen was still black" and "the screen stayed black" are
+# different findings and the timeout must not be what decides which you get.
+# ⚠ THE ISO NEEDS FOUR TIMES THE .img's WAIT, and 60s was not enough: the run
+# that failed reported "1 distinct colour, 0% lit" -- a black screen -- and the
+# only thing wrong was that the greeter had not drawn yet. At 240s the same ISO
+# reports 804 colours and a login card. A live medium decompresses everything it
+# touches out of a squashfs, under TCG, which the .img does not.
+case "$MEDIUM" in iso) GDEF=240 ;; *) GDEF=60 ;; esac
+GWAIT=${EMBER_TEST_GREETER_WAIT:-$GDEF}
+[ "$booted" = 1 ] && echo "  reached a login prompt; giving the display manager ${GWAIT}s more"
+sleep "$GWAIT"
 
 python3 - "$MON" "$SHOT" <<'ENDPY'
 import socket, sys, time
@@ -74,10 +101,12 @@ bad() { printf '  FAIL  %s\n' "$1" >&2; fail=$((fail+1)); }
 [ -s "$SHOT" ] && ok "captured the guest framebuffer" \
                || { bad "no screenshot — qemu's monitor did not answer"; echo "  0 passed, 1 failed"; exit 1; }
 
-OUTDIR="out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER"
-cp "$SHOT" "$OUTDIR/screen.ppm" 2>/dev/null || true
+cp "$SHOT" "$OUTDIR/screen-$MEDIUM.ppm" 2>/dev/null || true
+# ⛔ KEEP THE SERIAL LOG. It lives in a temp dir the trap deletes, so the one
+# run whose log you need -- the failing one -- is the one that throws it away.
+cp "$LOG" "$OUTDIR/serial-$MEDIUM.log" 2>/dev/null || true
 # A PNG beside it, because nothing on a modern desktop opens a PPM.
-python3 -c "from PIL import Image; Image.open('$SHOT').save('$OUTDIR/screen.png')" 2>/dev/null || true
+python3 -c "from PIL import Image; Image.open('$SHOT').save('$OUTDIR/screen-$MEDIUM.png')" 2>/dev/null || true
 
 python3 - "$SHOT" <<'ENDPY'
 import sys
@@ -117,5 +146,5 @@ sys.exit(1 if fails else 0)
 ENDPY
 rc=$?
 echo
-[ "$rc" = 0 ] && echo "  screenshot saved to out/$EMBER_ID-$EMBER_VERSION-$ARCH-$TIER/screen.ppm"
+[ "$rc" = 0 ] && echo "  screenshot saved to $OUTDIR/screen-$MEDIUM.png"
 exit $rc
