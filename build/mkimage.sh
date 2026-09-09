@@ -122,6 +122,7 @@ docker run --rm --privileged \
     -v "$PWD/assets:/ra-assets:ro" \
     -e IMGNAME="$(basename "$IMG")" \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
+    -e DEV_SSH_KEY="${EMBER_DEV_SSH_KEY:-0}" \
     -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" -e RPI_MODEL_N="$RPI_MODEL" \
     -e PI_MODE="$EMBER_PI_MODE" -e PI_ROTATE="$EMBER_PI_ROTATE" \
     "$VOID_IMAGE" /bin/sh /image-inside.sh

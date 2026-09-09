@@ -7,3 +7,9 @@ cores/
 installer/wifi.nmconnection
 __pycache__/
 assets/
+
+# ⚠ Optional, like installer/wifi.nmconnection. Drop public keys here and every
+# image built afterwards lets you straight in over ssh. Gitignored because it is
+# a specific person's key, not because a public key is a secret — each person
+# supplies their own.
+installer/authorized_keys

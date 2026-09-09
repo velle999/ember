@@ -385,26 +385,51 @@ Ember ships two graphics stacks and picks one at boot from the card it finds.
 | Intel | i915 | the system X server |
 | anything else | modesetting | the system X server |
 
-On a supported NVIDIA card the proprietary driver is the **default**, because on
-this hardware it is the better one: video that syncs at 360p where nouveau
-manages 144p, and none of the intermittent drawing artefacts nouveau shows on
-nv4x. nouveau is the fallback, and it is what runs everywhere else.
+On this hardware 304 is the better driver — video that syncs at 360p where
+nouveau manages 144p, and none of the intermittent drawing artefacts nouveau
+shows on nv4x — so it is what an NVIDIA machine should be running. nouveau is
+the fallback and what runs everywhere else.
+
+⛔ **But it has to be chosen at boot, not afterwards.** 304 cannot initialise a
+card nouveau has already programmed: it fails with `RmInitAdapter failed`,
+`/dev/nvidia0` returns `EIO`, and X exits with "no screens found". So nouveau
+must be blacklisted before the initramfs loads it:
+
+```
+rd.driver.blacklist=nouveau modprobe.blacklist=nouveau ember.gpu=nvidia
+```
+
+On the **ISO** that is a menu entry, *"Ember with the NVIDIA proprietary driver
+(304)"*. It is not the default, because on a card 304 does not support,
+blacklisting nouveau leaves no driver at all — and a live disc meets hardware
+nobody has tested.
+
+On an **installed system**, `ember-gpu nvidia` writes that into
+`/etc/default/grub`, regenerates `grub.cfg` and checks the line actually landed:
+
+```sh
+ember-gpu                 # what is running, what is configured, what would be detected
+ember-gpu nvidia          # proprietary: blacklists nouveau, updates GRUB
+ember-gpu nouveau         # open driver: removes the blacklist, updates GRUB
+ember-gpu auto            # detect from the card (the default)
+```
+
+The setting applies on the next boot. There is no runtime switch: swapping the
+module on a running system is what the old version did, and it left the machine
+with no display at all.
 
 lightdm starts whichever X server matches, through `/usr/libexec/ember-xserver`.
 That matters beyond driver choice: because lightdm owns the server, the session
 is registered on `seat0`, which is what lets you reboot, shut down and suspend
 without being asked for a password.
 
-To override the choice:
-
-```sh
-ember-gpu                 # what is running, what is configured, what would be detected
-ember-gpu nvidia          # force the proprietary stack
-ember-gpu nouveau         # force the open driver
-ember-gpu auto            # back to detection (the default)
-```
-
-The setting applies on the next boot.
+⚠ **304 also needs a udev rule to be usable at all.** It creates no DRM device,
+so nothing is tagged `master-of-seat`, elogind reports seat0 as non-graphical,
+and lightdm waits for ever at *"Monitoring logind for seats"* — no X process, no
+log, no error, and a monitor that goes to standby.
+`installer/71-ember-nvidia-seat.rules` tags the VGA device instead. If you ever
+see that lightdm message, ask `loginctl seat-status seat0` what the seat thinks
+it has.
 
 ⛔ **The proprietary driver arms a kernel bug, and you need to know about it.**
 `nvidia.ko` is unsigned and out-of-tree, and on this hardware that is the
