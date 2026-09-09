@@ -86,16 +86,19 @@ install -Dm644 /installer/07-ember-zram.sh /mnt/etc/runit/core-services/07-ember
 
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
-# ⛔ modesetting + glamor, NOT the legacy nouveau DDX. Xorg autoconfigures
-# `nouveau` first on an NVIDIA card, and that driver is deprecated and DRI2-only:
-# "screen 0 does not appear to be DRI3 capable". The result is a great deal of
-# redundant buffer copying, which presents as a laggy cursor and hitching menus
-# on hardware that is otherwise perfectly capable — a 1999 game on a 2006 card.
+# ⛔ TWO X CONFIGS, AND THE DIFFERENCE IS DELIBERATE. The live medium runs with
+# acceleration OFF because glamor on nv30 leaks pixmaps until the machine is out
+# of memory, and the installer's own 5.2 GB copy triggers it every time — four
+# measured runs in installer/20-modesetting.conf. An installed desktop wants
+# glamor and does not hit the bug in ordinary use.
 #
-# With this, Xorg reports:
-#     modeset(0): glamor X acceleration enabled on NV4B
-# which is the same GPU doing the same work down a much shorter path.
+# ⚠ The second file is NOT active where it lands. It sits in /usr/share/ember/
+# and ember-install copies it over the target's copy after the rsync, because
+# the rsync would otherwise carry the live medium's software-rendering config
+# onto every installed machine.
 install -Dm644 /installer/20-modesetting.conf /mnt/etc/X11/xorg.conf.d/20-modesetting.conf
+install -Dm644 /installer/20-modesetting-installed.conf \
+        /mnt/usr/share/ember/20-modesetting-installed.conf
 
 # ── libretro cores ──────────────────────────────────────────────────────────
 # ⚠ /usr/lib/libretro is where RetroArch looks by default on Linux, and the

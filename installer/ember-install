@@ -340,6 +340,28 @@ chmod 1777 "$MNT/tmp"
 
 UUID=$(blkid -s UUID -o value "$NEWPART")
 printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\n' "$UUID" > "$MNT/etc/fstab"
+
+# ⛔ GIVE THE TARGET ITS OWN X CONFIG BACK. The rsync above copied the LIVE
+# medium's /etc/X11/xorg.conf.d/20-modesetting.conf, and that one disables
+# acceleration on purpose: glamor on nv30 leaks pixmaps until the machine is out
+# of memory, which is what stopped this very installer from finishing — see
+# installer/20-modesetting.conf for the four measured runs. An installed desktop
+# should not inherit software rendering because the installer needed it.
+#
+# ⚠ Copied, not edited. The installed variant is a whole file in the image, so
+# the two configurations are each readable in one place instead of being a sed
+# expression that has to be reasoned about.
+if [ -f "$MNT/usr/share/ember/20-modesetting-installed.conf" ]; then
+    install -Dm644 "$MNT/usr/share/ember/20-modesetting-installed.conf" \
+            "$MNT/etc/X11/xorg.conf.d/20-modesetting.conf"
+    # ⚠ VERIFIED, because the failure is invisible: the desktop still comes up,
+    # just software-rendered, and nothing anywhere says why it feels slow.
+    grep -q '"AccelMethod" "glamor"' "$MNT/etc/X11/xorg.conf.d/20-modesetting.conf" || {
+        echo "   WARNING: the target's X config did not get glamor back" >&2; }
+else
+    echo "   WARNING: no installed X config in the image — the target keeps" >&2
+    echo "            the live medium's software rendering" >&2
+fi
 cp -a "$BK" "$MNT/root/" 2>/dev/null || true
 
 for d in dev proc sys; do mount --bind "/$d" "$MNT/$d"; done

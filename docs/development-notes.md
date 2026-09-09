@@ -493,6 +493,72 @@ that returns success is how this stayed invisible — the same shape as the
 patched-Mesa package that was silently absent from three builds.
 
 
+## ✅ RESOLVED: the graphical installer — glamor on nv30 leaks pixmaps (2026-09-09)
+
+⛔ **The live installer could not finish, and every explanation was wrong until
+the runs were done one variable at a time.** It reads as three unrelated faults —
+an out-of-memory kill, a segfault, and a frozen desktop with a live mouse — and
+they are one bug wearing different clothes.
+
+### The four runs
+
+| GART | zram | outcome |
+|---|---|---|
+| 512 MiB | 2 GB | **OOM at 270 s** — `rsync` invoked the killer, Xorg was taken |
+| 512 MiB | 7.8 GB | **SIGSEGV at 392 s**, address `0x10`, in `glamor_create_pixmap` → `libgallium` (nv30) |
+| 128 MiB | 2 GB | **OOM at 639 s** |
+| 128 MiB | 7.8 GB | **no OOM, no crash — Xorg spins in nv30 forever** at 100% of a core |
+| — | — | `AccelMethod "none"`: ✅ **completed in 846 s, everything else stock** |
+
+⚠ **Both mitigations worked and neither fixed anything.** A smaller GART more
+than doubled survival time, and more swap extended it again — 270 s → 392 s →
+639 s. All they changed was *how* it ended.
+
+### What it actually is
+
+Peak `Shmem` during a failing run was **481 MB** with gigabytes more pushed into
+swap; with glamor off it was **11 MB**, and peak swap use went from 3044 MB to
+**1 MB**. The pages compressed **11.8:1** because they are overwhelmingly zeros.
+That is not a working set, it is `glamor_create_pixmap` allocating and never
+releasing, and the installer's 5.2 GB rsync is simply the workload that runs it
+long enough to matter.
+
+⛔ **Neither the copy nor the redraw does it alone — only together.** Measured
+separately: the same rsync headless, no X client drawing, copied 5.2 GB in 350 s
+and survived comfortably (`Shmem` *fell* 351 → 173 MB as the kernel evicted cold
+graphics buffers into zram). A `\r` percentage counter redrawing in a terminal
+for 60 s moved nothing at all. It is the combination — buffers that are hot and
+GPU-mapped cannot be evicted, so the copy's demand lands on a lowmem zone that
+is already 92% spoken for at idle.
+
+⚠ **Bringing up the desktop costs about 670 MB of lowmem** on a machine with 838
+MB of it: `LowFree` is 741 MB booted-but-no-desktop and 68 MB at an idle XFCE.
+That is the headroom the whole failure lives inside, and it is why the AGP
+aperture size moves the timing so much.
+
+### The fix, and the two configs it needs
+
+`AccelMethod "none"` on the live medium. The installer draws text in a terminal
+and does not need the GPU; the cost is a CPU-drawn desktop that hitches when you
+drag a window, for the twenty minutes it exists.
+
+⛔ **An installed system must NOT inherit that**, and it will unless something
+stops it, because `ember-install` rsyncs the live rootfs onto the target. So
+there are two files and the divergence is deliberate:
+
+- `installer/20-modesetting.conf` — the live medium, `AccelMethod "none"`
+- `installer/20-modesetting-installed.conf` — travels in the image at
+  `/usr/share/ember/`, **not active where it sits**, and `ember-install` copies
+  it over the target's config after the rsync and warns if it did not take
+
+⚠ **The bug is still open on installed systems.** Ordinary desktop use does not
+allocate hard enough to hit it. If a long-running workload ever presents as a
+freeze with a live mouse cursor, that is this, and the config is the switch.
+
+⚠ Upstream has the `exo`/Thunar half of this ecosystem logged and unfixed; this
+one is not reported either — see the note on why patches are staying local.
+
+
 ## The elogind respawn loop
 
 ⛔ **lightdm must wait for elogind, not just dbus.** elogind has two owners —
