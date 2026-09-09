@@ -110,13 +110,21 @@ fi
 # ⚠ The in-container half is a FILE, not a -c string. See build/_image-inside.sh
 # for why: it is otherwise three levels of nested quoting and the first attempt
 # would not even parse.
+# ⚠ Built as a variable rather than an unquoted $(...) inside the argument list.
+# It was the only expansion in this docker run relying on word splitting, so a
+# checkout path with a space or a glob character would silently split or mangle
+# the mount while every other -v beside it was quoted.
+NVIDIA304_MOUNT=""
+[ -d "out/${EMBER_ID}-nvidia304-$ARCH" ] &&
+    NVIDIA304_MOUNT="$PWD/out/${EMBER_ID}-nvidia304-$ARCH:/nvidia304:ro"
+
 docker run --rm --privileged \
     -v /dev:/dev \
     -v "$PWD/$OUT:/out" \
     -v "$PWD/$INSIDE:/image-inside.sh:ro" \
     -v "$PWD/build/_chroot-setup.sh:/chroot-setup.sh:ro" \
     -v "$PWD/installer:/installer:ro" \
-    $([ -d "out/${EMBER_ID}-nvidia304-$ARCH" ] && echo "-v $PWD/out/${EMBER_ID}-nvidia304-$ARCH:/nvidia304:ro") \
+    ${NVIDIA304_MOUNT:+-v} ${NVIDIA304_MOUNT:+"$NVIDIA304_MOUNT"} \
     -v "$EDIDDIR:/edid:ro" \
     -v "$PWD/cores/$ARCH:/cores:ro" \
     -v "$PWD/assets:/ra-assets:ro" \

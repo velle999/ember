@@ -128,7 +128,7 @@ number taken carelessly is worse than no number.
 ⛔ **AND SHIPPING IT ARMS A KERNEL BUG THIS PROJECT ALREADY FOUND.** `nvidia.ko`
 is an unsigned out-of-tree module, and on this machine that is exactly the
 condition under which reading `/proc/modules` NULL-derefs in `m_show` — see
-[[reference_dracut_oops_on_proc_modules]]. Once the module is loaded, `lsmod`
+`docs/development-notes.md` ("lsmod takes this machine down"). Once the module is loaded, `lsmod`
 kills the box and so does anything invoking `dracut`. It is why `mk-kernel.sh`
 builds the nouveau patches in-tree rather than shipping a loose `.ko`.
 

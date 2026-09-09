@@ -25,7 +25,25 @@ xbps-install -Sy base-devel git curl tar xz patch automake autoconf libtool \
   xcb-util-wm-devel xcb-util-keysyms-devel libgcrypt-devel elogind-devel \
   dbus-devel libdrm-devel eudev-libudev-devel font-util xorg-util-macros \
   >/dev/null 2>&1
-xbps-install -y --repository=/emberrepo linux6.18-headers >/dev/null 2>&1
+# ⛔ PIN THE HEADERS TO THE KERNEL THIS IMAGE ACTUALLY SHIPS. This used to be an
+# unpinned `xbps-install linux6.18-headers`, running AFTER the -Suy above has
+# synced Void's remote repos -- so if upstream ever carries a newer revision than
+# the locally built kernel, xbps picks the remote one on version and ignores the
+# mounted local repo. The build then succeeds and produces an nvidia.ko whose
+# vermagic can never match the running kernel, with nothing anywhere saying so.
+: "${KVER_PKG:?KVER_PKG must be set by mk-nvidia304.sh}"
+if ! xbps-install -y --repository=/emberrepo "linux6.18-headers-${KVER_PKG}" >/tmp/hdr.log 2>&1; then
+    echo "nvidia304: could not install linux6.18-headers-${KVER_PKG} from /emberrepo" >&2
+    tail -15 /tmp/hdr.log >&2
+    exit 1
+fi
+# ⚠ Verify what actually got installed, not what was asked for.
+HDRV=$(xbps-query -p pkgver linux6.18-headers 2>/dev/null || echo "?")
+case "$HDRV" in
+    *"$KVER_PKG"*) echo "   headers $HDRV (pinned)" ;;
+    *) echo "nvidia304: headers are $HDRV, expected $KVER_PKG -- the module would not load" >&2
+       exit 1 ;;
+esac
 KSRC=$(ls -d /usr/src/kernel-headers-* | head -1)
 
 # ⛔ Void's kernel headers omit arch/x86/entry/syscalls, and without it the
@@ -48,7 +66,13 @@ for p in $(ls /work/kpatches/0*.patch | sort); do
     case "$(basename "$p")" in 0028*|0029*) continue ;; esac
     patch -Np1 -s -r /dev/null < "$p" >/dev/null 2>&1 || echo "     unexpected: $(basename "$p")"
 done
-patch -Np1 -s -r /dev/null < /work/kpatches/0029-kernel-6.15.patch >/dev/null 2>&1 || true
+# ⛔ NAMED FILE FROM A THIRD-PARTY FORK -- assert it is there. `|| true` hid both
+# a rename and a failed apply, and the module build then died later with the
+# generic "MODULE BUILD FAILED" tail instead of naming the missing patch.
+K615=/work/kpatches/0029-kernel-6.15.patch
+[ -f "$K615" ] || { echo "nvidia304: $K615 is missing -- the fork has renamed its patches" >&2; exit 1; }
+patch -Np1 -s -r /dev/null < "$K615" >/tmp/k615.log 2>&1 \
+    || { echo "nvidia304: 0029-kernel-6.15.patch did not apply:" >&2; tail -10 /tmp/k615.log >&2; exit 1; }
 
 # ⛔ The two makefile hunks the fork ships are cut against the x86_64 tarball and
 # carry -mno-red-zone -mcmodel=kernel, which the 32-bit file does not have. This

@@ -46,7 +46,9 @@ CONF=/etc/ember/gpu
 STATE=/run/ember-gpu
 P=/opt/x11-19
 
-usage() { sed -n '3,45p' "$0"; exit "${1:-0}"; }
+# ⚠ 3,40 is the comment block and nothing after it. The range used to run to
+# 45, so --help printed the SPDX line, `set -eu` and three assignments.
+usage() { sed -n '3,40p' "$0"; exit "${1:-0}"; }
 
 # ⚠ /sys/module, NEVER lsmod. See above: once nvidia.ko is loaded, reading
 # /proc/modules takes the machine down, and lsmod is exactly that read.

@@ -117,16 +117,74 @@ install -Dm644 /installer/nvidia304-supported.ids \
 # is not graphical and lightdm waits for ever. See the rule for the full story.
 install -Dm644 /installer/71-ember-nvidia-seat.rules \
                /mnt/etc/udev/rules.d/71-ember-nvidia-seat.rules
-if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ]; then
+# ⛔ TEST BOTH HALVES. This used to check only nvidia.ko -- but the module is
+# copied out BEFORE the X server is built, and _nvidia304-inside.sh has an
+# explicit "XSERVER BUILD FAILED; exit 1" path. So a partial 304 build leaves
+# exactly the state the old guard accepted, tar then fails under set -eu, and
+# mkimage.sh aborts with the loop device still attached -- on every run, until
+# somebody deletes the output directory by hand.
+if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ] && [ -f /nvidia304/x11-19.tar.gz ]; then
     tar xzf /nvidia304/x11-19.tar.gz -C /mnt
     install -Dm644 /nvidia304/nvidia.ko /mnt/opt/x11-19/nvidia.ko
-    echo "inside: NVIDIA 304 stack included (default on a supported NVIDIA card)"
+    # ⛔ THIS IS THE ONLY PLACE THE MODULE AND THE KERNEL MEET. mk-nvidia304.sh
+    # builds nvidia.ko against whatever headers it was given and prints a
+    # vermagic nobody compares to anything; the rootfs carries the kernel. A
+    # mismatch produces a module that can never insmod on the image it rides,
+    # and the only symptom is a silent fallback to nouveau on the target.
+    KMOD_KVER=$(ls /mnt/usr/lib/modules 2>/dev/null | head -1)
+    # ⚠ grep, NOT modinfo: kmod is not installed in this container, so a modinfo
+    # check silently produced an empty string and the gate never fired -- a
+    # check that cannot run is worse than no check, because it reads as passing.
+    NV_VERMAGIC=$(grep -aom1 'vermagic=[^ ]*' /nvidia304/nvidia.ko 2>/dev/null | cut -d= -f2)
+    if [ -z "$NV_VERMAGIC" ]; then
+        echo "inside: ⚠ could not read vermagic from nvidia.ko — not verifying it" >&2
+    elif [ -n "$KMOD_KVER" ] && [ "$KMOD_KVER" != "$NV_VERMAGIC" ]; then
+        echo "inside: ⛔ nvidia.ko vermagic '$NV_VERMAGIC' != kernel '$KMOD_KVER'" >&2
+        echo "        The 304 module cannot load on this image. Rebuild it:" >&2
+        echo "        build/mk-nvidia304.sh" >&2
+        exit 1
+    fi
+    echo "inside: NVIDIA 304 stack included, vermagic $NV_VERMAGIC matches the kernel"
+elif [ -f /nvidia304/nvidia.ko ] || [ -f /nvidia304/x11-19.tar.gz ]; then
+    # ⚠ Half a stack is a build that died in the middle, not an image built
+    # without 304. Say so rather than silently shipping the open drivers.
+    echo "inside: ⚠ INCOMPLETE NVIDIA 304 stack — module and X server must BOTH" >&2
+    echo "        be present. Re-run build/mk-nvidia304.sh. Shipping open drivers." >&2
 else
     echo "inside: no NVIDIA 304 stack — open drivers only (build/mk-nvidia304.sh builds it)"
 fi
 
 install -Dm644 /installer/99-ember-diag.sh /mnt/etc/runit/core-services/99-ember-diag.sh
 install -Dm644 /installer/thunar-uca.xml /mnt/etc/xdg/Thunar/uca.xml
+# ⛔ VOID'S cdemu-daemon PACKAGE SHIPS NO D-BUS SERVICE FILE. It installs the
+# binary, a man page and locales -- nothing else -- so the session bus has no
+# way to start it and `cdemu load` fails with
+#
+#     GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown:
+#     The name net.sf.cdemu.CDEmuDaemon was not provided by any .service files
+#
+# which reads as "the daemon crashed" rather than "nothing can ever start it".
+# Upstream ships this file; we supply it because the package does not.
+install -Dm644 /installer/net.sf.cdemu.CDEmuDaemon.service \
+               /mnt/usr/share/dbus-1/services/net.sf.cdemu.CDEmuDaemon.service
+
+# ── greeter branding ────────────────────────────────────────────────────────
+#
+# ⚠ Without this the login screen shows lightdm-gtk-greeter's stock placeholder
+# avatar -- a grey silhouette in a circle -- which reads as an unfinished
+# desktop rather than as a distribution. default-user-image is the fallback the
+# greeter uses for an account with no face of its own, which is exactly ours.
+install -Dm644 /installer/ember-logo.png /mnt/usr/share/ember/ember-logo.png
+GCONF=/mnt/etc/lightdm/lightdm-gtk-greeter.conf
+if [ -f "$GCONF" ]; then
+    sed -i '/^default-user-image=/d' "$GCONF"
+    sed -i 's|^\[greeter\]|&\ndefault-user-image=/usr/share/ember/ember-logo.png|' "$GCONF"
+    grep -q '^default-user-image=/usr/share/ember/ember-logo.png' "$GCONF" || {
+        echo "inside: greeter image not set" >&2; exit 1; }
+    echo "inside: greeter branded"
+else
+    echo "inside: no lightdm-gtk-greeter.conf — greeter not branded" >&2
+fi
 # ⚠ ONE X CONFIG, LIVE AND INSTALLED. There were briefly two, because the live
 # medium ran AccelMethod "none" while the nv30 pixmap leak was open; that is
 # fixed in Mesa now (patches/mesa-nv30-surface-del-leaks-resource-ref.patch) and

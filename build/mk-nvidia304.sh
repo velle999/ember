@@ -77,10 +77,37 @@ sed -n '/^prepare()/,/^}/p' "$XP/PKGBUILD" |
     grep -oE "\.\./[A-Za-z0-9._+-]+\.(patch|diff)" | sed 's|\.\./||' > "$WORK/xpatches/order.txt"
 echo "   patches kernel $(ls "$WORK/kpatches" | wc -l), xserver $(wc -l < "$WORK/xpatches/order.txt")"
 
+# ⛔ ASSERT, DO NOT JUST COUNT. order.txt is scraped out of a third-party fork's
+# PKGBUILD, and --depth 1 always tracks that fork's head. If it ever changes how
+# prepare() spells its patch paths, the grep yields NOTHING, every patch is
+# skipped (they are applied with `|| true`), and a completely unpatched 1.19
+# tree builds until configure fails on "gl >= 9.2.0" -- which is precisely the
+# misleading diagnosis docs/target-p4.md records having chased once already.
+[ -s "$WORK/xpatches/order.txt" ] || {
+    echo "mk-nvidia304: no xserver patches were extracted from the fork's PKGBUILD." >&2
+    echo "  The fork has probably changed how it names them. Check" >&2
+    echo "  $XP/PKGBUILD against the grep in this script." >&2
+    exit 1; }
+[ "$(ls "$WORK/kpatches" | wc -l)" -gt 0 ] || {
+    echo "mk-nvidia304: no kernel patches found in $KP" >&2; exit 1; }
+
 # ⚠ The kernel tarball, for the archheaders repair — Void's headers package
 # omits arch/x86/entry/syscalls and the module cannot build without it.
 KSRCDIR="out/kernel-build/void-packages/hostdir/sources/linux6.18-${EMBER_KERNEL_VERSION%_*}"
 [ -d "$KSRCDIR" ] || { echo "mk-nvidia304: no kernel sources at $KSRCDIR — run build/mk-kernel.sh first" >&2; exit 1; }
+
+# ⛔ AND THE LOCAL PACKAGE REPO MUST EXIST BEFORE IT IS MOUNTED. docker creates a
+# missing bind source as a root-owned empty directory, so the headers install
+# inside falls straight through to upstream Void -- producing a module whose
+# vermagic does not match the kernel this image ships, with no error anywhere.
+EMBERREPO="out/${EMBER_ID}-repo-$ARCH"
+[ -d "$EMBERREPO" ] || {
+    echo "mk-nvidia304: no local package repo at $EMBERREPO — run build/mk-kernel.sh first" >&2
+    exit 1; }
+ls "$EMBERREPO"/linux6.18-headers-*.xbps >/dev/null 2>&1 || {
+    echo "mk-nvidia304: $EMBERREPO has no linux6.18-headers package." >&2
+    echo "  The module would be built against Void's headers and would not load." >&2
+    exit 1; }
 
 # ── the supported-GPU list ──────────────────────────────────────────────────
 #
@@ -135,8 +162,9 @@ echo "   build   ~45 minutes"
 docker run --rm \
     -v "$PWD/$WORK:/work" \
     -v "$PWD/$OUT:/out" \
-    -v "$PWD/out/${EMBER_ID}-repo-$ARCH:/emberrepo:ro" \
+    -v "$PWD/$EMBERREPO:/emberrepo:ro" \
     -v "$PWD/$KSRCDIR:/work/linux-src:ro" \
+    -e KVER_PKG="$EMBER_KERNEL_VERSION" \
     "$IMAGE" /bin/sh /work/inside.sh
 
 echo "== done"
