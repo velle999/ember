@@ -133,6 +133,18 @@ done
 ln -sf libGL.so.304.137 "$P/lib/nvidia/libGL.so.1"
 ln -sf libGL.so.1 "$P/lib/nvidia/libGL.so"
 
+# ⛔ 304 SHIPS NO EGL AT ALL, AND THAT IS NOT A COSMETIC GAP. Anything that asks
+# for EGL -- wine 11 by default, and plenty else -- finds Mesa's, Mesa looks for
+# a DRM device that a blacklisted-nouveau box does not have, and the app renders
+# in llvmpipe on a machine whose X server is driving the GPU. ember-egl-glx is an
+# EGL that performs the calls with GLX against this same libGL. It lives here,
+# beside libGL, so it is on the path exactly when 50-ember-gl.sh puts the 304
+# directory there -- never on a nouveau boot.
+cc -O2 -Wall -fPIC -shared -o "$P/lib/nvidia/libEGL.so.1" /work/ember-egl-glx.c \
+   -Wl,-soname,libEGL.so.1 -ldl \
+   || { echo "EGL SHIM BUILD FAILED"; exit 1; }
+ln -sf libEGL.so.1 "$P/lib/nvidia/libEGL.so"
+
 # ⛔ 1.19's own xkbcomp cannot compile against current XKB data — "XKB: Couldn't
 # compile keymap", and the fallback fails too, so the server exits. Use the
 # system one, which is present on every Ember install.

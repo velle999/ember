@@ -132,6 +132,11 @@ install -Dm644 /installer/71-ember-nvidia-seat.rules \
 if [ -d /nvidia304 ] && [ -f /nvidia304/nvidia.ko ] && [ -f /nvidia304/x11-19.tar.gz ]; then
     tar xzf /nvidia304/x11-19.tar.gz -C /mnt
     install -Dm644 /nvidia304/nvidia.ko /mnt/opt/x11-19/nvidia.ko
+    # ⛔ A THIRD HALF, ADDED THE SAME WAY THE SECOND WAS. A 304 tree with no
+    # libEGL.so.1 boots and draws, so nothing here fails -- and every EGL client
+    # on the installed machine quietly renders in software instead.
+    [ -f /mnt/opt/x11-19/lib/nvidia/libEGL.so.1 ] || {
+        echo "image: the 304 tree has no libEGL.so.1 (rebuild with mk-nvidia304.sh)" >&2; exit 1; }
     # ⛔ THIS IS THE ONLY PLACE THE MODULE AND THE KERNEL MEET. mk-nvidia304.sh
     # builds nvidia.ko against whatever headers it was given and prints a
     # vermagic nobody compares to anything; the rootfs carries the kernel. A

@@ -158,6 +158,9 @@ else
 fi
 
 cp build/_nvidia304-inside.sh "$WORK/inside.sh"
+# ⚠ /emberrepo is the xbps repo, not this source tree, so the EGL translator
+# has to travel the same way the inside script does.
+cp installer/ember-egl-glx/ember-egl-glx.c "$WORK/ember-egl-glx.c"
 echo "   build   ~45 minutes"
 docker run --rm \
     -v "$PWD/$WORK:/work" \
