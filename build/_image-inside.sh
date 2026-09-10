@@ -110,7 +110,13 @@ install -Dm755 /installer/ember-xserver    /mnt/usr/libexec/ember-xserver
 install -Dm644 /installer/08-ember-gpu.sh  /mnt/etc/runit/core-services/08-ember-gpu.sh
 # ⚠ Sourced by /etc/lightdm/Xsession out of xinitrc.d, so GL CLIENTS get the
 # proprietary libGL too — the server having it is not enough.
-install -Dm644 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
+# ⛔ 0755, NOT 0644. Xsession's loop is `[ -x "$script" ] && . "$script"`, so a
+# non-executable file there is skipped in silence even though it is only ever
+# sourced. Installed 0644 it did nothing: the desktop came up on 304 and every
+# GL client still linked Mesa's libGL, which on a blacklisted-nouveau box has no
+# DRM device at all — GLX failed outright (SuperTuxKart: "Could not initialize
+# display") or fell back to software (UT99 under Wine: playable before, laggy).
+install -Dm755 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
 install -Dm644 /installer/nvidia304-supported.ids \
                /mnt/usr/share/ember/nvidia304-supported.ids
 # ⛔ Without this rule the 304 desktop never starts: no DRM device means seat0

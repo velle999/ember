@@ -228,6 +228,12 @@ for f in usr/bin/ember-install usr/bin/ember-swap usr/bin/ember-zram \
          etc/X11/xinit/xinitrc.d/50-ember-gl.sh; do
     [ -e "$LIVE/$f" ] || [ -L "$LIVE/$f" ] || { echo "mkiso: missing $f" >&2; fail=1; }
 done
+# ⛔ PRESENT IS NOT ENOUGH FOR THIS ONE. Xsession sources xinitrc.d scripts only
+# if they are executable, so a 0644 50-ember-gl.sh ships, passes the check above
+# and silently never runs — leaving a 304 desktop whose GL clients all link
+# Mesa's libGL with no DRM device behind it.
+[ -x "$LIVE/etc/X11/xinit/xinitrc.d/50-ember-gl.sh" ] || {
+    echo "mkiso: 50-ember-gl.sh is not executable, so Xsession will skip it" >&2; fail=1; }
 # ⛔ Without this line lightdm starts the SYSTEM X server whatever the card is,
 # which on a 304 machine is a login loop -- and the seatless-session bug that
 # made polkit demand a password for reboot comes straight back.
