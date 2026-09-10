@@ -538,6 +538,28 @@ desktop:
   `Ctrl+X` to boot
 - or log in on a text console (`Ctrl+Alt+F2`) and run `ember-gpu nouveau`
 
+⛔ **304 is GLX-only, and that decides two more things.** The stack under
+`/opt/x11-19` ships `libGL.so.304.137` and no EGL library at all, so anything that
+looks for EGL finds Mesa — which on a `modprobe.blacklist=nouveau` boot has no DRM
+device and answers `llvmpipe`. Hardware or software rendering therefore comes down to
+which library a process picks up:
+
+- **GL clients need the 304 `libGL` on their path.**
+  `/etc/X11/xinit/xinitrc.d/50-ember-gl.sh` puts it there for the session.
+  ⚠ It must be **executable** — `/etc/lightdm/Xsession` sources xinitrc.d scripts only
+  if they are, so a 0644 copy is skipped in silence and every GL client falls back to
+  software with nothing logged anywhere.
+- **Wine needs `UseEGL=N`.** Wine 11's X11 driver initialises OpenGL through EGL by
+  default (`libEGL warning: DRI3 error: Could not get DRI3 device` on every launch),
+  and no `LD_LIBRARY_PATH` can fix that, because 304 has no EGL to point it at. Per
+  prefix:
+
+      wine reg add "HKCU\Software\Wine\X11 Driver" /v UseEGL /t REG_SZ /d N /f
+
+  With it set, a wine process maps `libnvidia-glcore` and runs on the GPU; without it,
+  `glGetString(GL_RENDERER)` reports `llvmpipe` and games stutter. Measured on the P4
+  with UT99, 2026-09-10.
+
 ## Audio: install pipewire, get exactly one session manager
 
 Void ships pipewire's daemons, autostart entries and config fragments all
