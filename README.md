@@ -576,7 +576,6 @@ info` in 0.06 s.
 - **Unreal Tournament's native Linux build** crashes inside Mesa's `nv30`
   driver. The Windows build under Wine is unaffected and is what the reference
   machine runs.
-- **Extreme Tux Racer** is not packaged by Void for any architecture.
 
 ---
 
