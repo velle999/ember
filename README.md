@@ -11,7 +11,7 @@ Wine. **x86_64 is deliberately not a target.**
 | **Targets** | `i686` (Pentium 4 and later 32-bit x86), `aarch64` (Raspberry Pi 4 / 5) |
 | **Base** | Void Linux — glibc, runit, rolling |
 | **Desktop** | XFCE, or an IceWM tier for ~1 GB machines |
-| **Status** | both targets run on real hardware; the GeForce 7 3D freeze and the driver memory leak behind it are fixed |
+| **Status** | both targets run on real hardware; the GeForce 7 3D freeze and the driver memory leak behind it are fixed, and a supported NVIDIA card now boots the proprietary 304 stack instead of nouveau |
 
 Not a distribution from scratch: a package set, a desktop configuration, an
 image builder and an installer, on top of a base that already does the hard
@@ -42,10 +42,14 @@ Raspberry Pi 4:
 - **Windows games under Wine**, accelerated: Return to Castle Wolfenstein,
   Quake II, Unreal Tournament 99
 - **Native 3D**: SuperTuxKart
+- **The proprietary NVIDIA 304.137 stack**, as the alternative to nouveau on
+  the cards it covers: built here, picked at boot from the card itself, running
+  its own xorg-server 1.19 out of `/opt/x11-19`, and carried onto the disk by
+  the installer
 - **Dual boot** beside Windows XP, with the NTFS partition mounted read-only so
   its game library is readable and its links cannot break
-- **RetroArch** with 31 cores baked in, plus menu assets and controller
-  profiles — all offline
+- **RetroArch** with 37 libretro cores baked in on i686 — 30 on the Pi, where
+  a few are not built — plus menu assets and controller profiles, all offline
 - **DOS games** under DOSBox-X, which is built here because the emulator Void
   ships cannot execute on this CPU at all: `dosbox-staging` contains SSSE3
   instructions and a Pentium 4 stops at SSE3, so it takes SIGILL on every launch
@@ -67,9 +71,9 @@ Needs docker (for xbps) and qemu to test.
 build/validate-profiles.sh        # every package name still exists, per arch
 build/fetch-cores.sh i686         # libretro cores
 build/fetch-assets.sh             # RetroArch menu assets + controller profiles
-build/mkrootfs.sh i686 desktop    # 4.7 GB rootfs   (EMBER_WINE=0 saves ~790 MB)
-build/mkimage.sh  i686 desktop    # 6.2 GB bootable image  (USB)
-build/mkiso.sh    i686 desktop    # 2.1 GB bootable ISO    (DVD, or USB)
+build/mkrootfs.sh i686 desktop    # 4.9 GB rootfs   (EMBER_WINE=0 saves ~790 MB)
+build/mkimage.sh  i686 desktop    # 6.7 GB bootable image  (USB)
+build/mkiso.sh    i686 desktop    # 2.8 GB bootable ISO    (DVD, or USB)
 sudo build/write-usb.sh           # write the image to a stick, safely
 ```
 
@@ -85,7 +89,7 @@ two DVD drives.
 
 | | `.img` | `.iso` |
 |---|---|---|
-| size | 6.2 GB | **2.1 GB** — squashfs, fits a single-layer DVD |
+| size | 6.7 GB | **2.8 GB** — squashfs, fits a single-layer DVD |
 | media | USB only | **DVD**, or USB (it is isohybrid, `dd` works) |
 | root | writable ext4 | read-only squashfs + a RAM overlay |
 | keeps changes | yes | **no** — it forgets everything on reboot |
@@ -93,6 +97,13 @@ two DVD drives.
 
 The ISO is an installer you can test-drive; the `.img` is a system. Where USB
 boot works, prefer the `.img`.
+
+⚠ **The squashfs is zstd at 128 KB blocks, not xz at 1 MB**, and that is most of
+why the disc is 2.8 GB rather than around 2.4. xz is smaller and on this CPU it
+is unusable: launching a binary out of an xz/1M squashfs measured 41.5 s on the
+reference Pentium 4, three quarters of it the kernel decompressing rather than
+the drive reading. A single-layer DVD is 4.7 GB, so the space is affordable and
+the decompression time is not; `mkiso.sh` warns if the result stops fitting.
 
 ⚠ **The ISO's overlay lives in RAM**, 512 MB by default (`EMBER_OVERLAY_MB`).
 That comes straight out of what the desktop has to live in on a 2 GB machine,
@@ -168,6 +179,47 @@ finish.
 Diagnostic only, built at a revision *below* the shipping one so it can never
 win a dependency resolution by accident.
 
+### The NVIDIA 304 stack (optional, and the slowest of the three)
+
+    build/mk-nvidia304.sh   # nvidia.ko 304.137, and a private xorg-server 1.19
+
+Produces `out/ember-nvidia304-i686/nvidia.ko` and `x11-19.tar.gz`; `mkimage.sh`
+installs both if that directory exists and ships open drivers only if it does
+not. **Without this step an NVIDIA machine gets nouveau**, whatever the card is
+— the detector finds no module and answers `nouveau`, which is correct and is
+not what the table below promises. ~45 minutes: a kernel module build plus a
+full X server build.
+
+⚠ **This one is in the image layer**, unlike the Mesa and Thunar packages, so a
+rebuild needs `mkimage.sh` only. But the module is tied to one kernel — vermagic
+is checked at load — so it has to be rebuilt whenever `EMBER_KERNEL_VERSION`
+moves. `mkimage.sh` compares the two and refuses rather than shipping a module
+that cannot load; it greps the string out of the binary, because `modinfo` is
+not installed in that container and silently returned an empty string that
+always passed.
+
+### Testing what you built
+
+None of these need the reference machine, and none of them touch it:
+
+```sh
+build/boot-test.sh    i686 desktop          # does the .img reach a login prompt?
+build/desktop-test.sh i686 desktop 300 img  # …and does a desktop draw? (or `iso`)
+build/expand-test.sh  i686 desktop 4        # first boot grows the root — once
+build/install-test.sh desktop               # ember-install must not touch the NTFS partition
+tests/gpu-detect-test.sh                    # the driver decision, against fabricated PCI trees
+```
+
+`desktop-test.sh` dumps qemu's framebuffer rather than reading a log, because a
+log depends on some component being polite enough to say what it did. Give it
+`iso` as well as `img`: the two media are built by different scripts and boot by
+different paths, and an ISO once shipped that came up to an account-less getty
+while the `.img` beside it was perfect.
+
+⚠ qemu gives a Bochs VGA and software rendering, so a pass means *X, lightdm and
+the session are configured correctly* — not *nouveau works on that card*. Only
+the machine answers that.
+
 ## Installing
 
 ```sh
@@ -191,11 +243,17 @@ Neither target has enough memory to run comfortably without one.
 XFCE, Firefox, Thunar, a terminal, and the things this project exists for:
 
 - **Wine**, for Windows software of the era (791 MB; `EMBER_WINE=0` to omit)
-- **RetroArch** with 31 libretro cores, working offline
-- **DOSBox-staging**, **ScummVM**, **mednafen**
+- **RetroArch** with 37 libretro cores, working offline
+- **DOSBox-X**, **ScummVM**, **mednafen** — DOSBox-X and not `dosbox-staging`,
+  which cannot execute on this CPU at all
 - **`ember-disc`** mounts a disc image from Thunar's right-click menu, and
-  converts `.bin`/`.cue` sets
+  converts `.bin`/`.cue` sets; **cdemu** presents one as a real drive for the
+  games that poll for one, and **xfburn** writes to the drives themselves
 - **`ember-mount-windows`** mounts a Windows partition read-only
+- The tools XFCE's own configuration reaches for and does not depend on:
+  `xfce4-screenshooter` and `xkill` (bound to Print and Ctrl+Alt+Escape),
+  `xarchiver` with `zip` and `unar` behind Thunar's archive actions, and
+  `gvfs-smb` with `cifs-utils` so "Network" is not an empty folder
 
 `tools/hw-probe.sh` is POSIX sh with no dependencies, so it runs from any live
 USB and reports what decides the design on an unknown machine — SSE2, RAM,
@@ -210,12 +268,20 @@ sh tools/hw-probe.sh --tsv
 ## Layout
 
 ```
-build/        image and rootfs builders, plus the fetchers
-profiles/     package sets: base, desktop, desktop-min, extras, per-arch
+build/        rootfs, image and ISO builders, the optional package builds,
+              the fetchers, and the qemu tests
+branding/     the logo, as SVG — installer/ember-logo.png is generated from it
+docs/         development notes, and the Pentium 4 target write-up
 installer/    what ends up on the installed system
-tools/        hw-probe, preflight, publishing
-docs/         development notes
+patches/      the four nouveau, two Mesa and one Thunar patches
+profiles/     package sets: base, desktop, desktop-min, extras, oldgames, per-arch
+tests/        the checks that need no image
+tools/        hw-probe, and the diagnostic odds and ends
 ```
+
+`assets/` (RetroArch's menu assets) and `cores/` (the libretro cores) are
+fetched rather than committed, and gitignored — which is why the logo lives in
+`branding/` and not under `assets/`.
 
 ---
 
@@ -390,6 +456,17 @@ nouveau manages 144p, and none of the intermittent drawing artefacts nouveau
 shows on nv4x — so it is what an NVIDIA machine should be running. nouveau is
 the fallback and what runs everywhere else.
 
+⚠ **Only if the image was built with it.** `build/mk-nvidia304.sh` is a separate
+45-minute step, and an image built without it carries no `nvidia.ko` at all: the
+detector finds none and answers `nouveau` for every card. That is correct
+behaviour and it is not what the table above promises.
+
+The supported list is `installer/nvidia304-supported.ids`, generated from the
+driver's own `supportedchips.html` — and from its 3-column tables only, because
+the same appendix lists the 173.xx, 96.xx and 71.xx branches in 2-column ones. A
+sweep of every `0x####` on that page picks up a GeForce FX 5200 and sends every
+FX card down a path where the X server exits at startup.
+
 ⛔ **But it has to be chosen at boot, not afterwards.** 304 cannot initialise a
 card nouveau has already programmed: it fails with `RmInitAdapter failed`,
 `/dev/nvidia0` returns `EIO`, and X exits with "no screens found". So nouveau
@@ -417,6 +494,22 @@ ember-gpu auto            # detect from the card (the default)
 The setting applies on the next boot. There is no runtime switch: swapping the
 module on a running system is what the old version did, and it left the machine
 with no display at all.
+
+**Installing carries the choice onto the disk.** The live boot menu sets it for
+that boot only, and the installed `grub.cfg` is generated from the target's own
+`/etc/default/grub` — so `ember-install` detects the card and writes the
+blacklist there before running `grub-mkconfig`. Without that, a machine
+installed from the proprietary entry came back up on nouveau, detected
+`nvidia304`, refused the handover and fell back: correct, and not what was
+asked for.
+
+If 304 does not come up, `ember-gpu-apply` falls back to nouveau on its own. It
+decides by opening `/dev/nvidia0` — which is precisely what returns `EIO` when
+NVRM has not initialised the card — and it loads nouveau with `insmod` by path,
+because that boot carries `modprobe.blacklist=nouveau` and `modprobe` would
+refuse. The console stays up either way now: nouveau is blacklisted from the
+kernel command line rather than unloaded, so a failure leaves plain VGA text
+rather than a dead screen.
 
 lightdm starts whichever X server matches, through `/usr/libexec/ember-xserver`.
 That matters beyond driver choice: because lightdm owns the server, the session
@@ -469,19 +562,21 @@ info` in 0.06 s.
 - **None of the patches are upstream** — the four nouveau ones or the two Mesa
   ones. They build and they are verified on hardware, but they are carried here,
   not in Void, mainline or Mesa.
-- **The proprietary driver was never actually ruled out.** This README and
-  `docs/target-p4.md` used to say the 304.xx route was closed; it is not. The
-  kernel module builds against this tree's own 6.18 kernel — verified. What
-  stops it is that 304.137 needs a 2017 X server, so taking it means carrying
-  `xorg-server` 1.19 for the i686 tier. Written up as a fallback, with the order
-  of work, in [target-p4.md](docs/target-p4.md).
+- **304's advantage over nouveau is asserted, not measured.** The reason to
+  want it — proper reclocking on a card nouveau leaves at boot clocks — is still
+  an assumption resting on one qualitative comparison. Every frame-rate number
+  taken so far was vsync-capped or CPU-bound, so nothing here says how much
+  faster it is, only that it is not slower.
+- **Kernel policy and driver choice are still the awkward pairing.** 6.18 was
+  never chosen for the GPU, and the fork 304.137 comes from targets 6.12-LTS
+  natively; the period-matched stack would be 304.137 + `linux6.12` + xorg 1.19,
+  which means per-architecture kernel policy because the Pi wants a current one.
+  Written up, with the order of work, in [target-p4.md](docs/target-p4.md).
 - **`linux6.18-headers` is missing `arch/x86/entry/syscalls/`**, so the kernel's
-  `archheaders` step fails for *any* out-of-tree module built against it. Found
-  while testing the above; unrelated to nvidia and unfixed.
-- **The ISO has been boot-tested in qemu, not on real optical media.** It gets
-  to runit stage 2 with a clean `/proc` and no errors, and its El Torito record,
-  isohybrid MBR and volume label all check out — but a 2003 BIOS reading a
-  burned disc is not a VM, and that is the case it exists for.
+  `archheaders` step fails for *any* out-of-tree module built against it.
+  `mk-nvidia304.sh` repairs the tree by unpacking that directory out of the
+  kernel tarball before building; the packaging bug itself is Void's, and is
+  unfixed.
 - **SDL2 cannot match a GLX visual on this machine** — `Couldn't find matching
   GLX visual`, on nouveau, llvmpipe *and* NVIDIA 304, with the server offering
   192 of them. `SDL_VIDEO_X11_VISUALID=0x021` works around it. DOSBox-X does not
