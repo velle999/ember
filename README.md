@@ -562,11 +562,6 @@ info` in 0.06 s.
 - **None of the patches are upstream** — the four nouveau ones or the two Mesa
   ones. They build and they are verified on hardware, but they are carried here,
   not in Void, mainline or Mesa.
-- **Kernel policy and driver choice are still the awkward pairing.** 6.18 was
-  never chosen for the GPU, and the fork 304.137 comes from targets 6.12-LTS
-  natively; the period-matched stack would be 304.137 + `linux6.12` + xorg 1.19,
-  which means per-architecture kernel policy because the Pi wants a current one.
-  Written up, with the order of work, in [target-p4.md](docs/target-p4.md).
 - **`linux6.18-headers` is missing `arch/x86/entry/syscalls/`**, so the kernel's
   `archheaders` step fails for *any* out-of-tree module built against it.
   `mk-nvidia304.sh` repairs the tree by unpacking that directory out of the
