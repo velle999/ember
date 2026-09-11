@@ -1,0 +1,46 @@
+wine 11.17: a GL < 3.0 context gets an EMPTY extension table
+
+Symptom (reference P4, NVIDIA 304, OpenGL 2.1, 2026-09-11): every game that
+goes through wined3d -- Direct3D AND DirectDraw: Diablo (GOG dx), Diablo II,
+Fallout 3, Alpha Centauri, even the dxdiag.exe Blizzard's survey runs --
+dies about six seconds in with
+
+    err:d3d:wined3d_check_gl_call >>>>>>> GL_INVALID_ENUM (0x500) from extension detection @ dlls/wined3d/adapter_gl.c / 3698.
+    wine: Unhandled page fault on read access to 00000000 at address 00000000
+
+while pure-OpenGL games (Quake III, UT99) run fine.
+
+Mechanism. parse_current_extensions() is new in 11.17 (dae97d0b, "win32u: Move
+context extensions parsing from opengl32"). Its GL < 3.0 branch declares a
+local array with the SAME NAME as the BOOLEAN parameter it is meant to fill,
+parses glGetString(GL_EXTENSIONS) into the local, and then sets TRUE in the
+local too -- so the context's table is never written. opengl32's
+wglGetProcAddress consults that table and refuses every extension function
+above the context's version (474 of them here, glGenFramebuffers included:
+"warn:opengl:wglGetProcAddress Extensions required for ... not supported").
+wined3d parses the extension string itself, believes ARB_framebuffer_object,
+and its NVIDIA quirk test match_fbo_tex_update() calls the NULL
+glGenFramebuffers. The GL_INVALID_ENUM is the glGetIntegerv(GL_MAJOR_VERSION)
+on a 2.1 context, which is also why the branch is taken.
+
+Any GL < 3.0 driver hits it (nouveau nv30 is 2.1 too). Mesa llvmpipe reports
+4.5, takes the glGetStringi branch, and the same game runs there -- that A/B,
+and the crash being identical with ember-egl-glx removed from the library
+path, are what place it here and not in the driver or the shim.
+
+Still unfixed on wine master as of 2026-09-10.
+
+--- a/dlls/win32u/opengl.c	2026-09-11 16:07:45.938380576 -0500
++++ b/dlls/win32u/opengl.c	2026-09-11 16:07:45.948098879 -0500
+@@ -275,9 +275,9 @@
+     }
+     else
+     {
+-        enum opengl_extension extensions[GL_EXTENSION_COUNT];
+-        size_t extension_count = parse_extensions( (const char *)funcs->p_glGetString( GL_EXTENSIONS ), extensions );
+-        for (size_t i = 0; i < extension_count; i++) extensions[i] = TRUE;
++        enum opengl_extension parsed[GL_EXTENSION_COUNT];
++        size_t extension_count = parse_extensions( (const char *)funcs->p_glGetString( GL_EXTENSIONS ), parsed );
++        for (size_t i = 0; i < extension_count; i++) extensions[parsed[i]] = TRUE;
+     }
+ }

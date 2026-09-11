@@ -559,6 +559,26 @@ which library a process picks up:
   With it set, a wine process maps `libnvidia-glcore` and runs on the GPU; without it,
   `glGetString(GL_RENDERER)` reports `llvmpipe` and games stutter. Measured on the P4
   with UT99, 2026-09-10.
+- **Wine 11.17 needs the patched package from `build/mk-wine.sh`.** Stock 11.17 leaves
+  the extension table of any OpenGL context older than 3.0 empty, and 304 is 2.1. Every
+  game that goes through wined3d, Direct3D and DirectDraw alike, then calls a NULL GL
+  function while setting up and dies about six seconds in:
+
+      err:d3d:wined3d_check_gl_call >>>>>>> GL_INVALID_ENUM (0x500) from extension detection
+      wine: Unhandled page fault on read access to 00000000 at address 00000000
+
+  Pure-OpenGL games never touch wined3d and are unaffected, so the symptom is "some
+  games work and some don't". On the P4, Quake III ran, while Diablo, Diablo II,
+  Fallout 3 and Alpha Centauri all crashed. The fix is one line;
+  `patches/wine-11.17-legacy-gl-context-extensions.patch` has the mechanism. Verified
+  on the P4 with `wine-11.17_99`, 2026-09-11: Diablo, Diablo II (both DirectDraw and
+  Glide) and Alpha Centauri / Alien Crossfire now run on `libnvidia-glcore`. Fallout 3
+  gets past adapter setup but still crashes later, inside `Fallout3.exe` itself. That
+  is a separate problem, not this one.
+  `mk-wine.sh` builds it as `wine-11.17_99`, which outranks Void's own package. Once it
+  is installed, hold every wine package that is installed, usually
+  `xbps-pkgdb -m hold wine wine-common`. Naming one that is not installed makes the
+  command fail. The hold stops an update from bringing the stock build back.
 
 ## Audio: install pipewire, get exactly one session manager
 

@@ -41,6 +41,13 @@ winetricks
 # precisely what a machine with no network cannot do, so build/fetch-cores.sh
 # fetches them here and the image carries them. See docs/emulation.md.
 retroarch
+# Doom 3 on a native engine, from the original game's data. Doom 3 BFG Edition
+# CANNOT run on the reference GeForce 7600: its executable refuses to start
+# without GL_ARB_uniform_buffer_object, which needs GeForce 8 or later. dhewm3
+# needs base/pak000-pak008.pk4; a CD install only has pak000-pak004, and
+# pak005-pak008 come from id's free Linux 1.3.1 patch
+# (doom3-linux-1.3.1.1304.x86.run --tar xf --wildcards 'base/pak*').
+dhewm3
 # Standalone and light, and better than RetroArch for several systems because
 # there is no core to manage: NES, SNES, GB/GBA, PC Engine, Genesis, Lynx.
 mednafen

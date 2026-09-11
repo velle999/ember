@@ -783,6 +783,17 @@ never matches, because Linux truncates a process name to 15 characters
 (`UnrealTournamen`). A "killed" instance survives and later tests read its stale
 windows.
 
+#### Wine 11.17 crashes every wined3d game on OpenGL 2.1
+
+Stock Wine 11.17 leaves the extension table of an OpenGL context older than 3.0
+empty. On the P4's NVIDIA 304 stack, which is 2.1, every Direct3D or DirectDraw
+game then calls a NULL GL function during adapter setup and dies at address 0,
+while pure-OpenGL games run normally. It is fixed by
+`patches/wine-11.17-legacy-gl-context-extensions.patch`, built by
+`build/mk-wine.sh`. The README's 304 section has the symptom and the install
+steps. When a Wine game crashes about six seconds in, check `xbps-query -p pkgver
+wine` for the `_99` revision before looking at the game.
+
 
 ## Steam on a 32-bit host — it does not work
 
