@@ -573,8 +573,8 @@ which library a process picks up:
   `patches/wine-11.17-legacy-gl-context-extensions.patch` has the mechanism. Verified
   on the P4 with `wine-11.17_99`, 2026-09-11: Diablo, Diablo II (both DirectDraw and
   Glide) and Alpha Centauri / Alien Crossfire now run on `libnvidia-glcore`. Fallout 3
-  gets past adapter setup but still crashes later, inside `Fallout3.exe` itself. That
-  is a separate problem, not this one.
+  needed one more thing that is not Wine's doing — a shader package its repack omits.
+  See `docs/old-games.md`.
   `mk-wine.sh` builds it as `wine-11.17_99`, which outranks Void's own package. Once it
   is installed, hold every wine package that is installed, usually
   `xbps-pkgdb -m hold wine wine-common`. Naming one that is not installed makes the
