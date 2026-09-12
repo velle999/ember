@@ -119,6 +119,20 @@ install -Dm644 /installer/08-ember-gpu.sh  /mnt/etc/runit/core-services/08-ember
 install -Dm755 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
 install -Dm644 /installer/nvidia304-supported.ids \
                /mnt/usr/share/ember/nvidia304-supported.ids
+# ⛔ AND THE SAME LIST GOES IN THE INITRAMFS, because the choice between nouveau
+# and 304 cannot be made from the real root: udev binds nouveau during coldplug,
+# and 304 cannot take over a card nouveau has already initialised (RmInitAdapter
+# fails; ember-gpu-apply quotes the log). ember-gpu-detect knows the right
+# answer and runs far too late to act on it. The dracut module is the same
+# decision, made before udevd starts.
+for f in module-setup.sh ember-gpu-early.sh ember-gpu-pivot.sh; do
+    install -Dm755 "/installer/dracut/99ember-gpu/$f" \
+                   "/mnt/usr/lib/dracut/modules.d/99ember-gpu/$f"
+done
+# ⚠ Its own copy, not a symlink into /usr/share: module-setup.sh's check() reads
+# it out of $moddir to decide whether the module is worth including at all.
+install -Dm644 /installer/nvidia304-supported.ids \
+               /mnt/usr/lib/dracut/modules.d/99ember-gpu/nvidia304-supported.ids
 # ⛔ Without this rule the 304 desktop never starts: no DRM device means seat0
 # is not graphical and lightdm waits for ever. See the rule for the full story.
 install -Dm644 /installer/71-ember-nvidia-seat.rules \
@@ -316,6 +330,31 @@ fi
 # there is more than one kernel installed.
 if [ "$(find /mnt/boot -maxdepth 1 -name 'initramfs-*.img' -size +1M | wc -l)" -lt 1 ]; then
     echo "mkimage: no initramfs of any size in /boot" >&2
+    exit 1
+fi
+
+# ── the initramfs is rebuilt so it carries the GPU decision ─────────────────
+#
+# ⚠ REBUILT, NOT PATCHED. The one mkrootfs.sh produced was made when the kernel
+# package was installed -- before 99ember-gpu existed in this tree -- so the
+# module can only reach it by running dracut again here.
+EGKVER=$(ls /mnt/lib/modules | head -1)
+if [ -n "$EGKVER" ] && chroot /mnt /usr/bin/env dracut --force --no-hostonly \
+        --add ember-gpu "/boot/initramfs-$EGKVER.img" "$EGKVER" >/tmp/dracut-gpu.log 2>&1; then
+    # ⛔ CHECK THE CONTENT, NOT THE EXIT STATUS. dracut exits 0 having skipped a
+    # module whose check() returned non-zero -- which is exactly what happens if
+    # the ID list did not make it into $moddir -- and the image then boots with
+    # nouveau on every card, silently, as though nothing had been added.
+    if chroot /mnt lsinitrd "/boot/initramfs-$EGKVER.img" 2>/dev/null | grep -q ember-gpu-early; then
+        echo "inside: initramfs carries the early GPU decision"
+    else
+        echo "mkimage: dracut did not include 99ember-gpu in the initramfs" >&2
+        tail -20 /tmp/dracut-gpu.log >&2
+        exit 1
+    fi
+else
+    echo "mkimage: could not rebuild the initramfs with the GPU module" >&2
+    tail -20 /tmp/dracut-gpu.log >&2
     exit 1
 fi
 

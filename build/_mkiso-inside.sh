@@ -169,9 +169,13 @@ mount --bind "$WORK/dtmp" "$LIVE/var/tmp/ember-dracut"
 # no /init, fell through to mounting the root device itself, and panicked with
 #     VFS: Unable to mount root fs on "live:CDLABEL=EMBER"
 DLOG=/out/dracut-live.log
+# ⚠ ember-gpu as well as dmsquash-live: it decides between nouveau and 304
+# before udev binds either, which is the only moment that decision can be made.
+# The module itself came out of the .img, where _image-inside.sh installed it.
 chroot "$LIVE" /usr/bin/env dracut --force --no-hostonly \
     --tmpdir /var/tmp/ember-dracut \
     --add "dmsquash-live" \
+    --add "ember-gpu" \
     --add-drivers "squashfs loop overlay isofs sr_mod cdrom" \
     "/boot/initramfs-live-$KVER.img" "$KVER" >"$DLOG" 2>&1 || {
     echo "mkiso: dracut failed to build the live initramfs; last lines:" >&2
@@ -190,6 +194,14 @@ fi
 # boots to a dracut shell rather than a desktop.
 if ! lsinitrd "$IRD" 2>/dev/null | grep -q dmsquash; then
     echo "mkiso: the live initramfs carries no dmsquash-live hooks" >&2
+    exit 1
+fi
+# ⛔ THE SAME QUESTION FOR THE GPU MODULE, and for the same reason: dracut exits
+# 0 having silently skipped a module whose check() said no. Without this the
+# disc boots every NVIDIA card on nouveau and looks exactly like a disc that
+# chose to.
+if ! lsinitrd "$IRD" 2>/dev/null | grep -q ember-gpu-early; then
+    echo "mkiso: the live initramfs carries no early GPU decision" >&2
     exit 1
 fi
 echo "inside: live initramfs $((sz / 1024 / 1024)) MB, dmsquash-live present"
@@ -304,9 +316,13 @@ CONSOLE="loglevel=4 console=tty0 console=ttyS0,115200"
 # "no screens found". Blacklisted, the same card comes up with no NVRM error.
 # ⚠ Both spellings are needed: rd.driver.blacklist for dracut's own module
 # loading, modprobe.blacklist for everything after switch_root.
-# ⚠ It is a SEPARATE MENU ENTRY and not the default because on a card 304 does
-# not support, blacklisting nouveau leaves no driver at all -- and a live medium
-# meets cards nobody has tested.
+# ⚠ IT IS STILL A SEPARATE ENTRY, but it is no longer the only way to get 304.
+# The default entry now decides in the initramfs: 99ember-gpu reads the boot
+# card's PCI ID before udevd starts and blacklists nouveau only when 304 can
+# actually drive that card. This entry is the override -- it forces 304 on a
+# card the list does not name, which is a thing worth being able to try and a
+# terrible thing to do automatically: on a card 304 refuses, blacklisting
+# nouveau leaves no driver at all, and a live medium meets untested hardware.
 NVIDIA="rd.driver.blacklist=nouveau modprobe.blacklist=nouveau ember.gpu=nvidia"
 
 cat > "$BUILD/isolinux/isolinux.cfg" <<CFG
@@ -316,7 +332,7 @@ TIMEOUT 100
 MENU TITLE $EMBER_NAME $EMBER_VERSION
 
 LABEL ember
-    MENU LABEL Try or install $EMBER_NAME
+    MENU LABEL Try or install $EMBER_NAME  (driver chosen for your card)
     MENU DEFAULT
     KERNEL vmlinuz
     APPEND initrd=initrd.img $CMDLINE $GFX $CONSOLE
