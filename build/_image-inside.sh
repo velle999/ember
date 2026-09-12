@@ -119,6 +119,64 @@ install -Dm644 /installer/08-ember-gpu.sh  /mnt/etc/runit/core-services/08-ember
 install -Dm755 /installer/50-ember-gl.sh   /mnt/etc/X11/xinit/xinitrc.d/50-ember-gl.sh
 install -Dm644 /installer/nvidia304-supported.ids \
                /mnt/usr/share/ember/nvidia304-supported.ids
+
+# ── what this system says it is ─────────────────────────────────────────────
+#
+# ⛔ IT USED TO SAY "Void Linux", WITH NO VERSION AT ALL. /etc/os-release is a
+# symlink to /usr/lib/os-release and nothing here ever rewrote it, so an
+# installed machine could not tell you which Ember it was running -- and
+# EMBER_VERSION reached filenames and nothing else, which makes bumping it
+# meaningless to anybody holding the disc.
+#
+# ⚠ ID_LIKE=void ON PURPOSE. This IS a Void system underneath: xbps is its
+# package manager and anything keying on ID_LIKE to find that out is right.
+# ⚠ BUILD_ID is the date, because two discs can carry the same VERSION_ID while
+# one of them has a patched Wine in it and the other does not -- which is
+# exactly the confusion that prompted this.
+: "${EMBER_NAME:=Ember}" "${EMBER_ID:=ember}" "${EMBER_VERSION:=0}"
+cat > /mnt/usr/lib/os-release <<OSREL
+NAME="$EMBER_NAME"
+ID=$EMBER_ID
+ID_LIKE=void
+VERSION="$EMBER_VERSION"
+VERSION_ID=$EMBER_VERSION
+PRETTY_NAME="$EMBER_NAME $EMBER_VERSION"
+BUILD_ID=$(date -u +%Y-%m-%d)
+ANSI_COLOR="0;38;2;214;92;36"
+HOME_URL="https://github.com/velle999/ember"
+OSREL
+chmod 644 /mnt/usr/lib/os-release
+# ⚠ The symlink is Void's and is already right; asserted rather than assumed,
+# because a file here and a symlink there would leave two answers on one disk.
+[ -L /mnt/etc/os-release ] || ln -sf ../usr/lib/os-release /mnt/etc/os-release
+grep -q "^VERSION_ID=$EMBER_VERSION\$" /mnt/usr/lib/os-release || {
+    echo "mkimage: os-release does not carry VERSION_ID=$EMBER_VERSION" >&2; exit 1; }
+echo "inside: identifies as $EMBER_NAME $EMBER_VERSION"
+
+# ── the console mark ────────────────────────────────────────────────────────
+#
+# ⚠ /etc/xdg, so it applies to every user without anything being copied into a
+# home directory — and so `fastfetch` shows Ember rather than the generic mark
+# it falls back to now that os-release says ID=ember, which no built-in logo
+# matches.
+install -Dm644 /installer/ember-logo.txt          /mnt/usr/share/ember/logo.txt
+# ⛔ AND A CONSOLE ONE. The flame is drawn in Braille (U+28xx), which every
+# terminal emulator has and the VGA console font does not -- on TERM=linux it
+# is blanks or boxes, on exactly the screen somebody stares at when X has not
+# started. `fetch` picks between them; fastfetch on its own always takes the
+# Braille one, which is right in a terminal.
+install -Dm644 /installer/ember-logo-console.txt  /mnt/usr/share/ember/logo-console.txt
+install -Dm755 /installer/ember-fetch.sh          /mnt/usr/bin/fetch
+install -Dm644 /installer/fastfetch.jsonc /mnt/etc/xdg/fastfetch/config.jsonc
+# ⛔ THE LOGO IS THE HALF OF THIS THAT CAN GO MISSING QUIETLY. fastfetch with a
+# source it cannot read prints its info column and no art, exits 0, and looks
+# like a design choice.
+for _l in logo.txt logo-console.txt; do
+    [ -s "/mnt/usr/share/ember/$_l" ] || {
+        echo "mkimage: $_l did not reach the image" >&2; exit 1; }
+done
+[ -x /mnt/usr/bin/fetch ] || { echo "mkimage: fetch is not executable" >&2; exit 1; }
+
 # ⛔ AND THE SAME LIST GOES IN THE INITRAMFS, because the choice between nouveau
 # and 304 cannot be made from the real root: udev binds nouveau during coldplug,
 # and 304 cannot take over a card nouveau has already initialised (RmInitAdapter

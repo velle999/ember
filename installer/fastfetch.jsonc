@@ -1,0 +1,44 @@
+// Ember's console mark.
+//
+// ⛔ ONLY █ ▀ ▄ IN THE LOGO. The quadrant glyphs (▙▟▛▜) are not in the VGA
+// console font this machine boots into, so they come out as blanks or boxes on
+// the very terminal most likely to see this. Half-blocks are CP437 and are
+// present everywhere, X or not.
+//
+// ⛔ `command`, NEVER `custom`, for anything that has to RUN. fastfetch's
+// custom module prints its format verbatim -- a `$(...)` in there is displayed
+// literally, and the un-run text is long enough to wrap, which injects a blank
+// row into the logo column beside it and tears a row off the flame.
+{
+  "logo": {
+    "type": "file",
+    "source": "/usr/share/ember/logo.txt",
+    // The gradient from branding/ember-logo.svg: #ffd27a core, #ff8c1a body,
+    // #d2410e edge -- named/256 colours so a 16-colour console still shows fire.
+    "color": { "1": "93", "2": "38;5;208", "3": "38;5;166", "4": "38;5;229" },
+    "padding": { "top": 1, "right": 3 }
+  },
+  "display": { "separator": "  " },
+  "modules": [
+    "title",
+    "separator",
+    { "type": "os",       "key": "  os" },
+    { "type": "kernel",   "key": "  kernel" },
+    { "type": "uptime",   "key": "  uptime" },
+    { "type": "packages", "key": "  packages" },
+    { "type": "wm",       "key": "  wm" },
+    { "type": "shell",    "key": "  shell" },
+    { "type": "terminal", "key": "  term" },
+    { "type": "cpu",      "key": "  cpu" },
+    { "type": "gpu",      "key": "  gpu" },
+    // ⚠ WHAT THE KERNEL ACTUALLY BOUND, not what was asked for: ember-gpu-apply
+    // writes /run/ember-gpu with the driver that really loaded, and it falls
+    // back to nouveau in silence when 304 will not.
+    { "type": "command",  "key": "  driver",
+      "text": "cat /run/ember-gpu 2>/dev/null || echo unknown" },
+    { "type": "memory",   "key": "  memory" },
+    { "type": "disk",     "key": "  disk" },
+    "break",
+    "colors"
+  ]
+}

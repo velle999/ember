@@ -5,7 +5,7 @@
 # tree spells it.
 EMBER_NAME="Ember"
 EMBER_ID="ember"                # hostname, /etc/os-release ID, image filenames
-EMBER_VERSION="0.1.0"
+EMBER_VERSION="0.2.0"
 
 # Void's repositories. i686 and x86_64 live at the root of current/; every other
 # architecture is in a subdirectory named for itself.

@@ -132,6 +132,8 @@ docker run --rm --privileged \
     -e USERNAME="$USERNAME" -e PASSWORD="$PASSWORD" \
     -e DEV_SSH_KEY="${EMBER_DEV_SSH_KEY:-0}" \
     -e HOSTNAME_="$EMBER_ID" -e TIER="$TIER" -e RPI_MODEL_N="$RPI_MODEL" \
+    -e EMBER_NAME="$EMBER_NAME" -e EMBER_ID="$EMBER_ID" \
+    -e EMBER_VERSION="$EMBER_VERSION" \
     -e PI_MODE="$EMBER_PI_MODE" -e PI_ROTATE="$EMBER_PI_ROTATE" \
     "$VOID_IMAGE" /bin/sh /image-inside.sh
 
