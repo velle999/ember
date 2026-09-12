@@ -71,8 +71,24 @@ done
 # generic "MODULE BUILD FAILED" tail instead of naming the missing patch.
 K615=/work/kpatches/0029-kernel-6.15.patch
 [ -f "$K615" ] || { echo "nvidia304: $K615 is missing -- the fork has renamed its patches" >&2; exit 1; }
-patch -Np1 -s -r /dev/null < "$K615" >/tmp/k615.log 2>&1 \
-    || { echo "nvidia304: 0029-kernel-6.15.patch did not apply:" >&2; tail -10 /tmp/k615.log >&2; exit 1; }
+# ⛔ ONE HUNK OF THIS PATCH IS EXPECTED TO FAIL ON i686, AND THAT IS NOT AN
+# ERROR. Hunk 2 of kernel/Makefile.kbuild is cut against the x86_64 tarball --
+# it carries -mno-red-zone -mcmodel=kernel, which the 32-bit Makefile does not
+# have -- and the sed block below ports that same change for this architecture
+# on purpose. Asserting on patch(1)'s exit status therefore stopped a 45-minute
+# build on the one hunk the script goes on to do by hand:
+#     nvidia304: 0029-kernel-6.15.patch did not apply:
+#     1 out of 3 hunks FAILED
+# ⚠ The assert is still here, because a patch that silently stops arriving is
+# what `|| true` used to hide. It just asks the right question: did the C half
+# -- the timer_delete_sync/timer_container_of shims Linux 6.15 needs -- land?
+# Content, not exit status.
+patch -Np1 -s -r /dev/null --forward < "$K615" >/tmp/k615.log 2>&1 || true
+grep -q 'timer_container_of' kernel/nv.c && grep -q 'timer_delete_sync' kernel/nv-linux.h || {
+    echo "nvidia304: 0029-kernel-6.15.patch did not deliver its 6.15 shims:" >&2
+    tail -10 /tmp/k615.log >&2
+    echo "  (the Makefile hunk failing is expected on i686; the nv.c ones are not)" >&2
+    exit 1; }
 
 # ⛔ The two makefile hunks the fork ships are cut against the x86_64 tarball and
 # carry -mno-red-zone -mcmodel=kernel, which the 32-bit file does not have. This
@@ -82,6 +98,12 @@ M=kernel/Makefile.kbuild
 grep -q "objtool-enabled" $M || sed -i 's|^MODULE_OBJECT := $(MODULE_NAME).ko|MODULE_OBJECT := $(MODULE_NAME).ko\n\n$(MODULE_NAME).o: override objtool-enabled =|' $M
 sed -i 's|^EXTRA_CFLAGS += -D__KERNEL__ -DMODULE -DNVRM|ccflags-y += -std=gnu17 -D__KERNEL__ -DMODULE -DNVRM|' $M
 sed -i 's|^EXTRA_CFLAGS +=|ccflags-y +=|; s|\$(EXTRA_LDFLAGS)|$(ldflags-y)|' $M
+# ⛔ AND THE PORTED CHANGE IS CHECKED TOO. It replaces a hunk that is allowed to
+# fail above, so nothing else would notice if a future tarball spelled these
+# lines differently and the seds matched nothing.
+grep -q 'objtool-enabled' $M || { echo "nvidia304: the objtool bypass did not reach $M" >&2; exit 1; }
+grep -q '^ccflags-y' $M      || { echo "nvidia304: EXTRA_CFLAGS was never converted in $M" >&2; exit 1; }
+
 cd kernel && make SYSSRC="$KSRC" module >/work/kmod.log 2>&1
 [ -f nvidia.ko ] || { echo "MODULE BUILD FAILED"; tail -20 /work/kmod.log; exit 1; }
 cp nvidia.ko /out/

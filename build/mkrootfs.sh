@@ -154,7 +154,7 @@ LOCALREPO_DIR="out/${EMBER_ID}-repo-$ARCH"
 # cursor, which is the artefacting this project spent days on.
 if ls "$LOCALREPO_DIR"/*.xbps >/dev/null 2>&1; then
     echo "   local   $(ls "$LOCALREPO_DIR"/*.xbps | wc -l) package(s) in $LOCALREPO_DIR:"
-    for _p in linux6.18 mesa mesa-dri mesa-libgallium libgbm Thunar; do
+    for _p in linux6.18 mesa mesa-dri mesa-libgallium libgbm Thunar wine wine-common; do
         _f=$(ls "$LOCALREPO_DIR/$_p"-[0-9]*.xbps 2>/dev/null | head -1)
         [ -n "$_f" ] && echo "           $(basename "$_f")"
     done

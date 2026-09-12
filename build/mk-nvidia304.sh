@@ -109,6 +109,26 @@ ls "$EMBERREPO"/linux6.18-headers-*.xbps >/dev/null 2>&1 || {
     echo "  The module would be built against Void's headers and would not load." >&2
     exit 1; }
 
+# ⛔ THE VERSION TO PIN IS THE ONE IN THE LOCAL REPO, NOT THE ONE IN config.sh.
+# EMBER_KERNEL_VERSION names VOID'S release (…_1) because that is the source
+# mk-kernel.sh rebuilds — but what it PRODUCES is revision 99 (…_99, the marker
+# this tree uses for "ours"), and that is the package the image installs and the
+# module must match. Passing the config string through asked /emberrepo for a
+# package that has never existed there:
+#     nvidia304: could not install linux6.18-headers-6.18.49_1 from /emberrepo
+# and the whole 45-minute build stopped on its first step.
+KVER_PKG=$(ls "$EMBERREPO"/linux6.18-headers-*.xbps | head -1 |
+           sed 's|.*/linux6.18-headers-||; s|\.[^.]*\.xbps$||')
+# ⚠ A different REVISION is expected and fine; a different upstream VERSION is a
+# stale repo, and would build a module whose vermagic cannot load into the
+# kernel this image ships — which is exactly the silent failure the pin exists
+# to prevent, so it is still checked, just against the right thing.
+[ "${KVER_PKG%_*}" = "${EMBER_KERNEL_VERSION%_*}" ] || {
+    echo "mk-nvidia304: $EMBERREPO has headers $KVER_PKG, but config.sh pins ${EMBER_KERNEL_VERSION}." >&2
+    echo "  Run build/mk-kernel.sh, or bump EMBER_KERNEL_VERSION." >&2
+    exit 1; }
+echo "   headers $KVER_PKG (from $EMBERREPO)"
+
 # ── the supported-GPU list ──────────────────────────────────────────────────
 #
 # ⛔ 304 DOES NOT DRIVE EVERY NVIDIA CARD, and ember-gpu-detect has to know which
@@ -150,6 +170,11 @@ io.open(dst, 'w').write(
     "# html/supportedchips.html -- do not hand-edit.\n"
     "#\n"
     "# One 4-digit lowercase hex device ID per line. Vendor is always 10de.\n"
+    "#\n"
+    "# \u26d4 ONLY the 3-column tables. That file also lists the GPUs handled by\n"
+    "# the 173.14.xx, 96.43.xx and 71.86.xx branches in 2-column tables; those\n"
+    "# are NOT driveable by 304 and must never appear here. A GeForce FX 5200\n"
+    "# (0x0322) is the trap: it is in the document, under 173.14.xx.\n"
     % "304.137" + "\n".join(ids) + "\n")
 print("   ids     %d supported device IDs -> installer/nvidia304-supported.ids" % len(ids))
 PYIDS
@@ -167,7 +192,7 @@ docker run --rm \
     -v "$PWD/$OUT:/out" \
     -v "$PWD/$EMBERREPO:/emberrepo:ro" \
     -v "$PWD/$KSRCDIR:/work/linux-src:ro" \
-    -e KVER_PKG="$EMBER_KERNEL_VERSION" \
+    -e KVER_PKG="$KVER_PKG" \
     "$IMAGE" /bin/sh /work/inside.sh
 
 echo "== done"
