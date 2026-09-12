@@ -40,8 +40,12 @@ Raspberry Pi 4:
   own copy: 9.1 GB now copies with the progress meter redrawing throughout and
   the X server growing 2 MB
 - **Windows games under Wine**, accelerated: Return to Castle Wolfenstein,
-  Quake II, Unreal Tournament 99
-- **Native 3D**: SuperTuxKart
+  Quake II, Unreal Tournament 99, and — with the patched Wine this tree builds —
+  Diablo, Diablo II, Alpha Centauri and Fallout 3. Stock Wine 11.17 crashes
+  every Direct3D and DirectDraw game on this hardware; see the 304 section
+- **Native 3D**: SuperTuxKart, and Doom 3 through `dhewm3` from the original
+  game's data. Doom 3 BFG Edition cannot run on a GeForce 7 at all — its
+  executable requires GL uniform buffers that arrived with the GeForce 8
 - **The proprietary NVIDIA 304.137 stack**, as the alternative to nouveau on
   the cards it covers: built here, picked at boot from the card itself, running
   its own xorg-server 1.19 out of `/opt/x11-19`, and carried onto the disk by
