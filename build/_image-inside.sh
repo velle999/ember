@@ -195,6 +195,9 @@ install -Dm644 /installer/nvidia304-supported.ids \
 # is not graphical and lightdm waits for ever. See the rule for the full story.
 install -Dm644 /installer/71-ember-nvidia-seat.rules \
                /mnt/etc/udev/rules.d/71-ember-nvidia-seat.rules
+# Mac OS X i386 executables map __TEXT at 0x1000. See the file.
+install -Dm644 /installer/60-ember-mmap-min-addr.conf \
+               /mnt/etc/sysctl.d/60-ember-mmap-min-addr.conf
 # ⛔ TEST BOTH HALVES. This used to check only nvidia.ko -- but the module is
 # copied out BEFORE the X server is built, and _nvidia304-inside.sh has an
 # explicit "XSERVER BUILD FAILED; exit 1" path. So a partial 304 build leaves
