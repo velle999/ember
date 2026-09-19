@@ -31,19 +31,45 @@ set -eu
 P=/opt/x11-19
 MODE=$(cat /run/ember-gpu 2>/dev/null || echo nouveau)
 
+# ── The pointer is only as responsive as X's share of the CPU ──────────────
+#
+# ⚠ ON TWO THREADS, NICE 0 IS NOT GOOD ENOUGH FOR THE X SERVER. Measured on
+# the P4 (Pentium 4 + HT, 2 GB) 2026-09-12, with a browser open: load average
+# 8, 0% idle, run queue 5-12, and the session's Xorg -- at nice 0, no better
+# placed in the queue than any one content process -- had accumulated
+# **92.5 s of run-queue WAIT** over ten hours (field 2 of
+# /proc/PID/schedstat). Every one of those waits is a moment in which the
+# cursor does not move: that is what "the mouse briefly stops responding"
+# is, and it is scheduling, not the mouse. Nothing was wrong with the device
+# (never re-enumerated in 16 h, autosuspend off, its IRQ line clean).
+#
+# X is not itself a hog on this box -- 1.9% while a browser burned 130% of
+# both threads -- so letting it preempt costs the applications nothing you
+# can measure, while the desktop stays steerable under a load that used to
+# freeze the pointer.
+#
+# ⛔ nice -10, NOT a realtime class. X must never be able to lock the box out;
+# a wedged SCHED_FIFO server on a machine with no second seat is unrecoverable.
+# ⚠ If this ever runs unprivileged, GNU nice prints "cannot set niceness" and
+# execs the server anyway (verified, exit status preserved) -- so a wrapper
+# that cannot renice still starts a desktop. Kept unquoted deliberately: it
+# has to split into words in front of the exec.
+NICE="nice -n -10"
+command -v nice >/dev/null 2>&1 || NICE=
+
 if [ "$MODE" = nvidia304 ] && [ -x "$P/bin/Xorg" ]; then
     # ⛔ THE 304 DRIVER NEEDS ITS OWN X SERVER. It is built against xorg-server
     # 1.19's ABI (videodrv 23.0, XInput 24.1); the system X server is far newer
     # and will not load nvidia_drv.so at all. That server lives under its own
     # prefix, so it reads /opt/x11-19/etc and never sees /etc/X11/xorg.conf.d --
     # which is what keeps the nouveau modesetting snippet away from it.
-    exec env LD_LIBRARY_PATH="$P/lib/nvidia${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    exec $NICE env LD_LIBRARY_PATH="$P/lib/nvidia${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         "$P/bin/Xorg" -config "$P/etc/xorg.conf" "$@"
 fi
 
 # nouveau, radeon, intel, anything else: the system server autoconfigures.
 for x in /usr/libexec/Xorg /usr/bin/Xorg /usr/lib/xorg-server/Xorg; do
-    [ -x "$x" ] && exec "$x" "$@"
+    [ -x "$x" ] && exec $NICE "$x" "$@"
 done
 echo "ember-xserver: no X server found" >&2
 exit 1

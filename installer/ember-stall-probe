@@ -1,0 +1,101 @@
+#!/bin/sh
+#
+# ember-stall-probe — says WHICH of the three stalls froze the desktop.
+#
+# A pointer that "briefly stops responding" on a two-thread machine is one of
+# exactly three things, and the kernel already distinguishes them:
+#
+#   cpu  some  — the run queue is long and X waits its turn        (a hog)
+#   mem  full  — reclaim has stopped EVERY runnable task           (2 GB full)
+#   io   full  — every runnable task is blocked on the disk        (swapfile)
+#
+# ⛔ `full` IS THE WORD TO READ. `some` means something waited; `full` means
+# nothing on the box ran at all, and a stopped X server is a cursor nailed to
+# the screen. Alongside them it samples X's own run-queue wait (field 2 of
+# /proc/PID/schedstat), which is the same stall measured at the one process
+# whose delay the user actually sees.
+#
+# ⚠ A PROBE THAT FORKS IS A PROBE THAT LIES. The first version ran three awks
+# and a cut every second; on a P4 that is tens of milliseconds of the very
+# contention it was there to measure, and it duly logged itself. Everything
+# below is shell built-ins — the only forks are `date` and `ps`, in the branch
+# that has already decided this second is worth a line.
+#
+# Usage:  nice -n 19 ember-stall-probe [logfile] &        (default ~/ember-stall.log)
+# Stop:   match the exact cmdline, NOT `pkill -f ember-stall-probe`:
+#
+#   for d in /proc/[0-9]*; do c=$(tr "\0" " " < "$d/cmdline" 2>/dev/null)
+#     case "$c" in "/bin/sh $HOME/ember-stall-probe"*) kill "${d#/proc/}";; esac
+#   done
+#
+# ⛔ OVER SSH, `pkill -f` KILLS THE SSH SESSION ITSELF — the pattern matches the
+# remote shell's own command line, and it dies mid-one-liner with no output to
+# say why. ⚠ Bracketing the first letter is NOT enough when the same command
+# also names the path, because the bracketed regex then matches that path.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+LOG=${1:-$HOME/ember-stall.log}
+THRESH=50000            # µs stalled within one second before a line is worth it
+HB=900                  # seconds of quiet between heartbeats
+
+# ── readers, fork-free ────────────────────────────────────────────────────
+# /proc/pressure/* is two fixed lines, "some" then "full", each ending in
+# total=<µs since boot>. Positional parameters split it without a subprocess.
+psi() {                                        # $1=cpu|memory|io $2=some|full
+    VAL=0
+    if [ "$2" = some ]; then
+        # ⛔ ONE VARIABLE, NOT `read l _`. With a trailing name `read` gives the
+        # first WORD to $l and the rest to $_, so the line parses to "some" and
+        # total= is never seen; the caller then compares an empty string with
+        # -gt and the probe dies in a loop of "integer expected".
+        read -r l < "/proc/pressure/$1" 2>/dev/null || return 0
+    else
+        { read -r _; read -r l; } < "/proc/pressure/$1" 2>/dev/null || return 0
+    fi
+    set -- $l; VAL=${5#total=}
+}
+xorg_pid() { XPID=$(pgrep -x Xorg 2>/dev/null | head -1); }
+xorg_wait() {                                  # µs of run-queue wait, -1 = rebase
+    if read -r _ w _ < "/proc/$XPID/schedstat" 2>/dev/null; then
+        XW=$((w / 1000))
+    else
+        XW=-1; xorg_pid                        # X restarted at logout: re-find it
+    fi
+}
+# ⚠ $(...) IS A FORK. The readers above set VAL/XW in place for that reason --
+# four command substitutions a second is four subshells a second, which on this
+# hardware is back inside the noise floor the probe is trying to measure.
+
+xorg_pid
+psi cpu some;   c0=$VAL
+psi memory full; m0=$VAL
+psi io full;     i0=$VAL
+xorg_wait;       x0=$XW
+printf '%s probe start xorg=%s thresh=%sms\n' "$(date '+%F %T')" "${XPID:-none}" $((THRESH/1000)) >> "$LOG"
+
+quiet=0
+while sleep 1; do
+    psi cpu some;    c1=$VAL
+    psi memory full; m1=$VAL
+    psi io full;     i1=$VAL
+    xorg_wait;       x1=$XW
+    dc=$((c1 - c0)); dm=$((m1 - m0)); di=$((i1 - i0)); dx=$((x1 - x0))
+    c0=$c1; m0=$m1; i0=$i1; x0=$x1
+    if [ "$x1" -lt 0 ]; then xorg_wait; x0=$XW; dx=0; fi   # a rebase is not a stall
+    quiet=$((quiet + 1))
+
+    if [ "$dc" -gt "$THRESH" ] || [ "$dm" -gt "$THRESH" ] ||
+       [ "$di" -gt "$THRESH" ] || [ "$dx" -gt "$THRESH" ]; then
+        read -r la _ < /proc/loadavg
+        top=$(LC_ALL=C ps -eo pcpu,comm --sort=-pcpu --no-headers 2>/dev/null |
+              head -3 | tr '\n' '|')
+        printf '%s STALL cpu_some=%sms mem_full=%sms io_full=%sms xorg_runq=%sms load=%s top=%s\n' \
+            "$(date '+%F %T')" $((dc/1000)) $((dm/1000)) $((di/1000)) $((dx/1000)) \
+            "$la" "$top" >> "$LOG"
+        quiet=0
+    elif [ "$quiet" -ge "$HB" ]; then
+        printf '%s quiet %smin\n' "$(date '+%F %T')" $((HB/60)) >> "$LOG"
+        quiet=0
+    fi
+done

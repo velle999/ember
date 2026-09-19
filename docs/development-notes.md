@@ -1377,3 +1377,112 @@ suspend-to-RAM is not on offer and the machine falls back to s2idle, which on
 software: P4-era boards call it *ACPI Suspend Type* and frequently ship set to
 `S1 (POS)` instead of `S3 (STR)`. If `deep` appears in that file after changing
 it, S3 is available.
+
+## "The mouse briefly stops responding" — it is the scheduler (2026-09-12)
+
+On the P4 the pointer froze in short bursts on an ordinary desktop. On a box
+whose graphics stack has been the suspect for a week, the reflex is to look at
+the driver. It is not the driver, and it is not the mouse.
+
+### The device is fine, and that is worth proving before anything else
+
+Measured on the installed P4 (NVIDIA 304, XFCE, 16 h of uptime):
+
+| probe | reading | meaning |
+|---|---|---|
+| `/sys/bus/usb/devices/3-1/devnum` | `2` | never re-enumerated since boot — no disconnect storm |
+| `power/control` | `on` | USB autosuspend is off for the mouse, so it is not a wake latency |
+| IRQ 21 over 5 s (idle) | `+0` | the shared `ehci/uhci` line is quiet, not flooded |
+| `Xorg.0.log` | no input errors | libinput bound it once, `event4`, and kept it |
+
+⚠ The `device removed` / `device is a pointer` pairs in the 304 server's log
+are **elogind pausing and resuming the session's devices** across a lock or VT
+switch, not the mouse dropping off. They come in one batch for *every* device,
+seven hours apart. Read the batch, not the line.
+
+### What the numbers actually say
+
+With a browser open on two hardware threads:
+
+```
+load average   7.97  5.19  3.34        run queue 5-12, 0% idle, us 85 sy 14
+PSI cpu        some avg300=49%          half the time SOMETHING waits for a CPU
+Xorg schedstat ran 723 s, WAIT 92.5 s   over its 10 h life, at nice 0
+PSI memory     full total = 29.5 s      whole-machine stalls in reclaim
+PSI io         full total = 69.3 s      whole-machine stalls on the disk
+```
+
+⛔ **`full` is the word to read.** `some` means a task is waiting; **`full`
+means every runnable task on the box is stopped**, and a stopped X server is a
+cursor nailed to the screen. 69 s of that since boot, in bursts, is exactly the
+shape of the complaint — brief, repeated, not correlated with anything the user
+did to the mouse.
+
+⚠ And the `Xorg` line is the direct hit: 92.5 s of *run-queue wait* is 92.5 s
+in which the server had input to deliver and no CPU to deliver it on.
+
+### The fix: X gets the queue (`installer/ember-xserver`)
+
+X ran at nice 0, ranked level with every browser content process. It is not a
+hog — 1.9% while the browser burned 130% of both threads — so it is pure gain
+to let it preempt. The wrapper now execs both servers under `nice -n -10`.
+
+- ⛔ **Not a realtime class.** A wedged `SCHED_FIFO` X server on a machine with
+  one seat is unrecoverable; -10 wins every ordinary race and still yields.
+- ⚠ Unprivileged, GNU `nice` prints `cannot set niceness` and **execs the
+  server anyway** (verified, exit status preserved), so a wrapper that cannot
+  renice still starts a desktop.
+
+### Still open: swap is on the disk, and the disk is a P4's disk
+
+`ember-zram` is **fallback-only by design** — it stands down whenever
+`ember-swap` produced a swapfile, which on an installed machine it always does.
+So every anonymous page that overflows 2 GB goes to a file on a 2003 drive, and
+`ember-zram`'s own header already records the working set overcommitting RAM by
+**~1 GB** on this exact box. That is where the 69 s of `io full` comes from.
+
+⚡ Candidate, not shipped: run **both** — zram at priority 100, the
+swapfile at -2, so compressed RAM takes the hot pages and the disk stays as
+cold overflow. It costs CPU on a machine that has none spare, which is why it
+wants the measurement below before it is shipped, not after.
+
+### The measurement that settles it: `ember-stall-probe`
+
+A stall is one of exactly three things and they are distinguishable, so the
+probe samples PSI and `Xorg`'s run-queue wait once a second and writes a line
+**only** when a second actually contained a stall:
+
+```
+2026-09-12 18:02:11 STALL cpu_some=730ms mem_full=0ms io_full=0ms xorg_runq=210ms load=8.4 top=...
+```
+
+`cpu_some` high → an application won the CPU and X waited; `io_full`/`mem_full`
+high → swap. The first says the nice change was the right fix; the second says
+ship the zram change as well. `installer/ember-stall-probe`, run by hand — it is
+in the tree but not wired into an image. Costs **0.1% of one thread** at nice 19,
+logs to `~/ember-stall.log`.
+
+⚠ **Three traps it was built around, all of which bit first:**
+
+- ⛔ **A probe that forks is a probe that lies.** The first version ran three
+  `awk`s and a `cut` every second; on a P4 that is tens of milliseconds of the
+  contention it exists to measure, and it logged itself — `top=` naming its own
+  `ps`. Built-ins only now, and the cost fell 3×.
+- ⛔ **`read -r l _` gives `$l` the first WORD, not the line.** `/proc/pressure/cpu`
+  parsed to `some`, `total=` was never found, and every comparison after it was
+  `[: : integer expected` — in a loop, on a machine you are not watching. One
+  variable reads the whole line.
+- ⛔ **Units.** `schedstat` is **nanoseconds**; PSI totals are **microseconds**.
+  Mixing them printed 26 *seconds* of run-queue wait inside a one-second sample
+  on an idle box — an impossible number, which is the only reason it was caught.
+
+⛔ **And stopping it: `pkill -f ember-stall-probe` over ssh kills the ssh session
+itself.** The pattern matches the remote shell's own command line. ⚠ Bracketing
+the first letter is **not enough** if the same one-liner also names the path —
+the regex then matches that. Match the exact cmdline instead:
+
+```sh
+for d in /proc/[0-9]*; do c=$(tr "\0" " " < "$d/cmdline" 2>/dev/null)
+  case "$c" in "/bin/sh $HOME/ember-stall-probe"*) kill "${d#/proc/}";; esac
+done
+```

@@ -520,6 +520,13 @@ That matters beyond driver choice: because lightdm owns the server, the session
 is registered on `seat0`, which is what lets you reboot, shut down and suspend
 without being asked for a password.
 
+The wrapper also starts X at **`nice -10`**. On two hardware threads a server at
+nice 0 ranks level with every browser content process, and the pointer freezes
+in bursts whenever something saturates the CPU — measured on the P4 as 92.5 s of
+run-queue wait accumulated by Xorg over ten hours. X is not a hog here (1.9%
+against a browser's 130%), so the priority costs applications nothing and keeps
+the desktop steerable under load.
+
 ⚠ **304 also needs a udev rule to be usable at all.** It creates no DRM device,
 so nothing is tagged `master-of-seat`, elogind reports seat0 as non-graphical,
 and lightdm waits for ever at *"Monitoring logind for seats"* — no X process, no
