@@ -24,7 +24,7 @@
 #   out/ember-nvidia304-i686/x11-19.tar.gz  /opt/x11-19: server + driver + GL
 #
 # _image-inside.sh installs both if the directory exists, and silently ships
-# without them if it does not — the same arrangement as installer/wifi.nmconnection.
+# without them if it does not.
 #
 # ⚠ THE MODULE IS TIED TO ONE KERNEL. vermagic is checked at load, so this must
 # be rebuilt whenever EMBER_KERNEL_VERSION moves or the module will refuse to

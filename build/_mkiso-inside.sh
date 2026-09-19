@@ -120,6 +120,22 @@ cp -a "$LOWER/." "$LIVE/"
 umount "$LOWER"; losetup -d "$LOOP"; LOOP=""
 echo "inside: tree copied"
 
+# ⛔ THE ISO IS THE PUBLIC MEDIUM, SO NOTHING PERSONAL GOES ON IT. 0.1.0 and
+# 0.2.0 were built while the image scripts copied a Wi-Fi keyfile, PSK included,
+# into /etc/NetworkManager/system-connections of every image -- and the ISO is
+# squashed from that image, so both published discs carried it. The copy is
+# gone; this refuses rather than trusting that nothing ever puts one back. The
+# same goes for a developer's ssh key (EMBER_DEV_SSH_KEY=1), which lets its
+# owner into every machine installed from the disc.
+LEAK=$(find "$LIVE/etc/NetworkManager/system-connections" -type f 2>/dev/null
+       find "$LIVE/home" "$LIVE/root" -path '*/.ssh/authorized_keys' 2>/dev/null)
+if [ -n "$LEAK" ]; then
+    echo "mkiso: ⛔ refusing -- the image carries credentials:" >&2
+    echo "$LEAK" | sed "s|^$LIVE|    |" >&2
+    echo "mkiso: rebuild the .img without EMBER_DEV_SSH_KEY" >&2
+    exit 1
+fi
+
 # ── the two things a live medium needs changed ──────────────────────────────
 #
 # ⛔ fstab NAMES A UUID THAT DOES NOT EXIST HERE. It is the root partition of
