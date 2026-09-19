@@ -274,7 +274,7 @@ echo "patched packages in this rootfs:"
 docker run --rm -v "$PWD/$ROOTFS:/rootfs" -e XBPS_ARCH="$ARCH" "$VOID_IMAGE" \
     /bin/sh -c 'xbps-query -r /rootfs -l 2>/dev/null |
                 awk "{print \$2}" |
-                grep -E "^(linux6\.18|mesa|mesa-dri|mesa-libgallium|libgbm|Thunar)-[0-9]"' |
+                grep -E "^(linux6\.18|mesa|mesa-dri|mesa-libgallium|libgbm|Thunar|wine)-[0-9]"' |
 while read -r pkg; do
     case "$pkg" in
         linux6.18-*_99)        echo "   $pkg   patched (nouveau fence_sema/accel_move)" ;;
@@ -286,6 +286,8 @@ while read -r pkg; do
         mesa*|libgbm*)         echo "   $pkg   ⚠ STOCK — menu/cursor artefacting on nv30" ;;
         Thunar-*_99)           echo "   $pkg   patched (statusbar timeout freed on destroy)" ;;
         Thunar-*)              echo "   $pkg   ⚠ STOCK — the exo-CRITICAL flood and the per-window view leak are back" ;;
+        wine-*_99)             echo "   $pkg   patched (a GL 2.1 context keeps its extension table)" ;;
+        wine-*)                echo "   $pkg   ⚠ STOCK — every Direct3D/DirectDraw game crashes on the GeForce 7" ;;
     esac
 done
 
