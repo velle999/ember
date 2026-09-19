@@ -331,9 +331,13 @@ MNT=$(mktemp -d)
 mount "$NEWPART" "$MNT"
 
 echo "   copying the system (this takes a while)"
+# ⚠ Not the machine ID: that is the running system's own, and a copy would give
+# the new install the same one. 05-ember-machine-id.sh makes it a fresh one on
+# its first boot.
 rsync -aHAXx --info=progress2 \
       --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/ \
       --exclude=/tmp/ --exclude=/mnt/ --exclude=/media/ --exclude="$MNT" \
+      --exclude=/var/lib/dbus/machine-id --exclude=/etc/machine-id \
       / "$MNT/"
 mkdir -p "$MNT"/{proc,sys,dev,run,tmp,mnt,media}
 chmod 1777 "$MNT/tmp"

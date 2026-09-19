@@ -126,13 +126,20 @@ echo "inside: tree copied"
 # squashed from that image, so both published discs carried it. The copy is
 # gone; this refuses rather than trusting that nothing ever puts one back. The
 # same goes for a developer's ssh key (EMBER_DEV_SSH_KEY=1), which lets its
-# owner into every machine installed from the disc.
-LEAK=$(find "$LIVE/etc/NetworkManager/system-connections" -type f 2>/dev/null
-       find "$LIVE/home" "$LIVE/root" -path '*/.ssh/authorized_keys' 2>/dev/null)
+# owner into every machine installed from the disc. And a D-Bus machine ID:
+# one baked in is shared by every install (see installer/05-ember-machine-id.sh).
+# ⛔ `|| true` INSIDE THE $(...): find exits 1 on a path that does not exist,
+# which is the CLEAN case here, and under set -e a failing assignment ends the
+# script with no message -- the first build with this check died right after
+# "tree copied" for exactly that.
+LEAK=$( { find "$LIVE/etc/NetworkManager/system-connections" -type f
+          find "$LIVE/home" "$LIVE/root" -path '*/.ssh/authorized_keys'
+          find "$LIVE/var/lib/dbus/machine-id" "$LIVE/etc/machine-id"
+        } 2>/dev/null || true )
 if [ -n "$LEAK" ]; then
-    echo "mkiso: ⛔ refusing -- the image carries credentials:" >&2
+    echo "mkiso: ⛔ refusing -- the image carries credentials or a machine ID:" >&2
     echo "$LEAK" | sed "s|^$LIVE|    |" >&2
-    echo "mkiso: rebuild the .img without EMBER_DEV_SSH_KEY" >&2
+    echo "mkiso: rebuild the .img with build/mkimage.sh, and without EMBER_DEV_SSH_KEY" >&2
     exit 1
 fi
 

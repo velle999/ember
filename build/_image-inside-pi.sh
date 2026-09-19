@@ -213,6 +213,7 @@ install -Dm755 /installer/ember-install /mnt/usr/bin/ember-install
 install -Dm755 /installer/ember-mount-windows /mnt/usr/bin/ember-mount-windows
 install -Dm755 /installer/ember-disc /mnt/usr/bin/ember-disc
 install -Dm755 /installer/ember-expand-root /mnt/usr/bin/ember-expand-root
+install -Dm644 /installer/05-ember-machine-id.sh /mnt/etc/runit/core-services/05-ember-machine-id.sh
 install -Dm644 /installer/06-ember-expand.sh /mnt/etc/runit/core-services/06-ember-expand.sh
 install -Dm755 /installer/ember-swap /mnt/usr/bin/ember-swap
 install -Dm644 /installer/07-ember-swap.sh /mnt/etc/runit/core-services/07-ember-swap.sh
@@ -277,6 +278,14 @@ install -Dm755 /chroot-setup.sh /mnt/tmp/setup.sh
 chroot /mnt env USERNAME="$USERNAME" PASSWORD="$PASSWORD" \
                 TIER="$TIER" LOOP="$LOOP" BOOTLOADER=none /tmp/setup.sh
 rm -f /mnt/tmp/setup.sh
+
+# ── no machine ID ships ─────────────────────────────────────────────────────
+#
+# ⛔ LAST, AFTER EVERYTHING THAT RUNS IN THE CHROOT. Void's dbus package writes
+# /var/lib/dbus/machine-id when it is installed, so the image carries the ID of
+# its build and every machine installed from it shared one. It is removed here
+# and 05-ember-machine-id.sh makes a machine's own on its first boot.
+rm -f /mnt/var/lib/dbus/machine-id /mnt/etc/machine-id
 
 # ── verify by content, not by exit status ───────────────────────────────────
 for f in start4.elf fixup4.dat kernel8.img bcm2711-rpi-4-b.dtb config.txt cmdline.txt; do

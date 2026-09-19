@@ -236,8 +236,10 @@ ember-install --reuse /dev/sda3 # install into one existing partition
 to look first. The installer backs up the partition table before touching it
 and verifies the result before reporting success.
 
-On first boot the root filesystem grows to fill its disk, and a swapfile is
-created — twice RAM, capped at 4 GB, skipped if the disk cannot spare it.
+On first boot the root filesystem grows to fill its disk, the machine makes its
+own D-Bus machine ID (none ships on the disc, so two installs never share one),
+and a swapfile is created — twice RAM, capped at 4 GB, skipped if the disk
+cannot spare it.
 Neither target has enough memory to run comfortably without one.
 
 ---
