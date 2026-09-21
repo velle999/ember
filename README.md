@@ -183,7 +183,7 @@ finish.
 Diagnostic only, built at a revision *below* the shipping one so it can never
 win a dependency resolution by accident.
 
-### The NVIDIA 304 stack (optional, and the slowest of the three)
+### The NVIDIA 304 stack (optional, and the longest of the three builds)
 
     build/mk-nvidia304.sh   # nvidia.ko 304.137, and a private xorg-server 1.19
 
